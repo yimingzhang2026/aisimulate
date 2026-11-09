@@ -25,7 +25,9 @@ from scripts.fpm_accuracy.scenarios import score_scenario
 if "AISIMULATE_TEST_WHEEL" in os.environ:
     import_module("aisimulate_core.sdk")
 else:
-    pytest.importorskip("aisimulate_core.sdk")
+    # Evaluator bindings put this checkout's sources on sys.path, so the lazy SDK package is importable even
+    # without the compiled extension; require the extension itself.
+    pytest.importorskip("aisimulate._runtime")
 phase_fixtures = import_module("python.aisimulate.tests.unit.sdk.test_fpm_phase_readiness")
 training_support = import_module("python.aisimulate.tests.unit.sdk.fpm_training_support")
 training_support.import_sklearn()

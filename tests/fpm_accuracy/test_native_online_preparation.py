@@ -97,6 +97,7 @@ class NativeOnlineTests(unittest.TestCase):
         if "AISIMULATE_TEST_WHEEL" in os.environ:
             trainer = import_module("aisimulate_core.sdk.fpm_learned")
         else:
+            pytest.importorskip("aisimulate._runtime")
             trainer = pytest.importorskip("aisimulate_core.sdk.fpm_learned")
         self.prepare_offline()
         lines = self.prepare_feedback(("decode", "idle", "prefill", "mixed", "decode"))

@@ -20,6 +20,7 @@ from scripts.fpm_self_service import adapt_gbdt
 if "AISIMULATE_TEST_WHEEL" in os.environ:
     sdk = import_module("aisimulate_core.sdk")
 else:
+    pytest.importorskip("aisimulate._runtime")
     sdk = pytest.importorskip("aisimulate_core.sdk")
 
 
