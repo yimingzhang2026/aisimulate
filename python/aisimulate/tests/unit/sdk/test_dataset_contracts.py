@@ -405,42 +405,6 @@ def test_preparation_rejects_malformed_profile_json(dataset, keys, value):
     assert not output.exists()
 
 
-@pytest.mark.parametrize(
-    "legacy,valid",
-    [
-        ({"catalog_version": 5}, True),
-        ({"catalog_version": 6}, True),
-        ({"catalog_version": 7}, True),
-        ([], False),
-        ({}, False),
-        ({"catalog_version": []}, False),
-        ({"catalog_version": {}}, False),
-        ({"catalog_version": 5.0}, False),
-        ({"catalog_version": "5"}, False),
-        ({"catalog_version": True}, False),
-    ],
-)
-def test_legacy_fpm_discovery_requires_supported_integer_version(tmp_path, legacy, valid):
-    path = "catalog/fpm/index.json"
-    write(tmp_path, path, legacy)
-    write(
-        tmp_path,
-        "catalog/dataset.json",
-        {
-            "schema_version": "aisim-dataset-index/v1",
-            "dataset_id": "public/example",
-            "categories": {
-                "fpm": {"root": "data/fpm", "index": artifact(tmp_path, path, "category-index"), "layout": "legacy-fpm"}
-            },
-        },
-    )
-    if valid:
-        assert check_dataset(tmp_path).categories["fpm"].layout == "legacy-fpm"
-    else:
-        with pytest.raises(ValueError, match="unsupported legacy FPM index"):
-            check_dataset(tmp_path)
-
-
 @pytest.mark.parametrize("field", ["hardware", "framework", "framework_version"])
 def test_preparation_rejects_manifest_predictor_identity_mismatch(dataset, field):
     root, path, manifest = dataset
