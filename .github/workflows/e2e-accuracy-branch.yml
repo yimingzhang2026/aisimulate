@@ -136,6 +136,10 @@ jobs:
     name: Prepare shared E2E measurements
     timeout-minutes: 120
     runs-on: prod-aisimulate-default-amd64-v1
+    # Holds the private HF read token. Preview runs use their own environment (and may scope their own token).
+    # The token reaches only steps that run main's code from `trusted/` in `trusted-venv`; PR-controlled code
+    # (the evaluated checkout and the exact wheel) never shares a step, interpreter or virtualenv with it.
+    environment: ${{ inputs.preview && 'e2e-accuracy-preview' || 'e2e-accuracy-private' }}
     container:
       image: ${{ vars.CI_JOB_CONTAINER_IMAGE }}
       env:
@@ -144,7 +148,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.sha }}
+          ref: main
+          path: trusted
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
@@ -153,10 +158,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ca-certificates libgomp1
-          python -m venv "${RUNNER_TEMP}/accuracy-venv"
-          echo "${RUNNER_TEMP}/accuracy-venv/bin" >> "${GITHUB_PATH}"
       - name: Install measurement tooling
-        run: python -m pip install --require-hashes -r scripts/e2e_accuracy/requirements.txt
+        run: |
+          python -m venv "${RUNNER_TEMP}/trusted-venv"
+          "${RUNNER_TEMP}/trusted-venv/bin/pip" install --require-hashes -r trusted/scripts/e2e_accuracy/requirements.txt
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: e2e-accuracy-dataset
@@ -168,12 +173,13 @@ jobs:
           AISIM_DATA_CACHE: ${{ runner.temp }}/accuracy-data
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          python scripts/e2e_accuracy/fetch_accuracy_measurements.py \
+          "${RUNNER_TEMP}/trusted-venv/bin/python" trusted/scripts/e2e_accuracy/fetch_accuracy_measurements.py \
             --manifest "${RUNNER_TEMP}/accuracy-dataset/e2e-accuracy-dataset.json" --output "${RUNNER_TEMP}/accuracy-measurements"
       - name: Encrypt private measurements
         env:
           HF_TOKEN: ${{ secrets.HF_READ_AISIM_INFX_CACHE }}
-        run: python scripts/e2e_accuracy/private_artifacts.py seal "${RUNNER_TEMP}/accuracy-measurements" "${RUNNER_TEMP}/accuracy-measurements-encrypted"
+        run: |
+          "${RUNNER_TEMP}/trusted-venv/bin/python" trusted/scripts/e2e_accuracy/private_artifacts.py seal "${RUNNER_TEMP}/accuracy-measurements" "${RUNNER_TEMP}/accuracy-measurements-encrypted"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: e2e-accuracy-measurements-${{ inputs.artifact_key }}
@@ -192,6 +198,10 @@ jobs:
         shard: [0, 1, 2, 3]
     runs-on: prod-aisimulate-default-amd64-v1
     timeout-minutes: 360
+    # Holds the private HF read token. Preview runs use their own environment (and may scope their own token).
+    # The token reaches only steps that run main's code from `trusted/` in `trusted-venv`; PR-controlled code
+    # (the evaluated checkout and the exact wheel) never shares a step, interpreter or virtualenv with it.
+    environment: ${{ inputs.preview && 'e2e-accuracy-preview' || 'e2e-accuracy-private' }}
     container:
       # The runner executes as non-root; use its sudo-enabled CI image.
       image: ${{ vars.CI_JOB_CONTAINER_IMAGE }}
@@ -208,9 +218,18 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          path: trusted
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
+      - name: Install the trusted credentialed tooling (never receives the evaluated wheel)
+        run: |
+          python -m venv "${RUNNER_TEMP}/trusted-venv"
+          "${RUNNER_TEMP}/trusted-venv/bin/pip" install --require-hashes -r trusted/scripts/e2e_accuracy/requirements.txt
       - name: Install the CPU campaign environment
         run: |
           sudo apt-get update
@@ -247,7 +266,8 @@ jobs:
       - name: Decrypt private measurements
         env:
           HF_TOKEN: ${{ secrets.HF_READ_AISIM_INFX_CACHE }}
-        run: python scripts/e2e_accuracy/private_artifacts.py open "${RUNNER_TEMP}/accuracy-measurements-encrypted" "${RUNNER_TEMP}/accuracy-measurements"
+        run: |
+          "${RUNNER_TEMP}/trusted-venv/bin/python" trusted/scripts/e2e_accuracy/private_artifacts.py open "${RUNNER_TEMP}/accuracy-measurements-encrypted" "${RUNNER_TEMP}/accuracy-measurements"
       - name: Run both predictors for this shard
         shell: bash
         env:
@@ -281,7 +301,7 @@ jobs:
         run: |
           for kind in shard evidence; do
             if test -d "${RUNNER_TEMP}/accuracy-${kind}"; then
-              python scripts/e2e_accuracy/private_artifacts.py seal "${RUNNER_TEMP}/accuracy-${kind}" "${RUNNER_TEMP}/accuracy-${kind}-encrypted"
+              "${RUNNER_TEMP}/trusted-venv/bin/python" trusted/scripts/e2e_accuracy/private_artifacts.py seal "${RUNNER_TEMP}/accuracy-${kind}" "${RUNNER_TEMP}/accuracy-${kind}-encrypted"
             fi
           done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -315,6 +335,10 @@ jobs:
     needs: [wheel, shards]
     timeout-minutes: 30
     runs-on: prod-aisimulate-default-amd64-v1
+    # Holds the private HF read token. Preview runs use their own environment (and may scope their own token).
+    # The token reaches only steps that run main's code from `trusted/` in `trusted-venv`; PR-controlled code
+    # (the evaluated checkout and the exact wheel) never shares a step, interpreter or virtualenv with it.
+    environment: ${{ inputs.preview && 'e2e-accuracy-preview' || 'e2e-accuracy-private' }}
     container:
       image: ${{ vars.CI_JOB_CONTAINER_IMAGE }}
       env:
@@ -325,9 +349,18 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          path: trusted
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
+      - name: Install the trusted credentialed tooling (never receives the evaluated wheel)
+        run: |
+          python -m venv "${RUNNER_TEMP}/trusted-venv"
+          "${RUNNER_TEMP}/trusted-venv/bin/pip" install --require-hashes -r trusted/scripts/e2e_accuracy/requirements.txt
       - name: Install aggregation tooling
         run: |
           python -m venv "${RUNNER_TEMP}/accuracy-venv"
@@ -345,7 +378,8 @@ jobs:
       - name: Decrypt private shard results
         env:
           HF_TOKEN: ${{ secrets.HF_READ_AISIM_INFX_CACHE }}
-        run: python scripts/e2e_accuracy/private_artifacts.py open "${RUNNER_TEMP}/accuracy-shards-encrypted" "${RUNNER_TEMP}/accuracy-shards"
+        run: |
+          "${RUNNER_TEMP}/trusted-venv/bin/python" trusted/scripts/e2e_accuracy/private_artifacts.py open "${RUNNER_TEMP}/accuracy-shards-encrypted" "${RUNNER_TEMP}/accuracy-shards"
       - name: Verify every shard and qualify the complete cohort
         shell: bash
         env:

@@ -113,6 +113,42 @@ Run `python scripts/e2e_accuracy/private_artifacts.py open DOWNLOADED_DIR OUTPUT
 in the campaign environment. Token rotation requires a new complete workflow run;
 old ciphertext cannot be opened with the replacement token.
 
+### Trusted credentialed job
+
+The credentialed part of the campaign is a default-branch job, not a PR workflow.
+`E2E Accuracy Matrix` triggers only on `schedule` and `workflow_dispatch`, never on
+`pull_request`, `pull_request_target` or `workflow_run`, and `resolve` accepts only
+`refs/heads/main` or an exact maintainer-copied `pull-request/<n>` preview.
+
+- **Environments.** Jobs that hold `HF_READ_AISIM_INFX_CACHE` declare
+  `e2e-accuracy-private` (nightly and manual main runs) or `e2e-accuracy-preview`
+  (previews). The token stays read-only. A repository administrator protects the
+  private environment (deployment branch `main`, required reviewers as policy
+  decides) and may give the preview environment its own, lower-privilege token under
+  the same secret name; an environment secret overrides the repository secret.
+- **Code that sees the token.** Every step with the token runs `main`'s scripts,
+  checked out to `trusted/`, with a virtualenv (`trusted-venv`) built only from the
+  hash-pinned requirements. The evaluated checkout, the exact wheel and its build
+  never share a step, interpreter or environment variable with the token; the wheel
+  job holds no secret at all. The dataset pin comes from `main`'s
+  `.github/e2e-accuracy-dataset.json`, so a preview of a pin change is evaluated
+  after the pin lands on `main`.
+- **What PR-controlled code does see.** Preview evaluation runs the PR's wheel on
+  the decrypted measurement tables (data, not a credential). Treat that as the
+  residual exposure of a maintainer-approved preview; private data is never uploaded
+  unencrypted, and preview results are never published.
+- **Data layout.** Measurements are read through `aisimulate_core.data`. The pin file
+  names the layout: `legacy-inferencex` (the default, today's cache) or `aisim-e2e/v1`
+  once the migrated dataset is published and the pin is changed.
+- **Publication.** Only the sanitized `e2e-accuracy-web-*` artifact reaches the
+  default-branch Pages build, which holds no secret and deploys through the
+  `github-pages` environment. The disclosure policy for aggregates derived from
+  private data (granularity, what is withheld) is not agreed yet; until it is, the
+  published granularity is the existing overview and must not be widened.
+
+[`tests/test_e2e_accuracy_trust.py`](../../tests/test_e2e_accuracy_trust.py) enforces
+these rules on the workflow files in the Pages checks.
+
 Complete campaigns upload sanitized `e2e-accuracy-web-<branch-key>` artifacts.
 Pages validates the branch's successful qualification job in the artifact's exact
 run attempt, producer, revision, coverage, and checksums before combining it with
