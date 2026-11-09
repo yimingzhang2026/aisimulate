@@ -46,6 +46,7 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
+from pydantic import BaseModel, ConfigDict
 
 from aisimulate_core.data import (
     Artifact,
@@ -67,6 +68,92 @@ OP_REUSE_MANIFEST_SCHEMA_ID = "aisim-op-reuse-manifest/v1"
 OP_QUERY_VERSIONS_SCHEMA_ID = "aisim-op-query-versions/v1"
 OP_DECLARED_REUSE_SCHEMA_ID = "aisim-op-declared-reuse/v1"
 OP_SOURCE_MAP_SCHEMA_ID = "aisim-op-source-map/v1"
+
+
+# --- Row models for the registered schemas (JSON Schema snapshots in schemas.py) ---
+
+
+class _OpRow(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
+
+
+class OpLatencyRow(BaseModel):
+    """One row of an op measurement table (``aisim-op-latency/v1``).
+
+    Columns differ per operation family and file (116 distinct names across the
+    packaged tables); only ``kernel_source`` is common to all. The schema
+    therefore pins ``kernel_source`` and allows the family-specific columns,
+    whose names, types and units are defined by the collector for each family.
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+    kernel_source: str
+
+
+class OpReuseManifestRow(_OpRow):
+    """One group of ``perf_data_reuse_manifest.yaml`` (``aisim-op-reuse-manifest/v1``)."""
+
+    op_file: str
+    kernel_source: str
+    tier: str
+    systems: list[str]
+    frameworks: list[str]
+    total_raw_rows: int
+    within_framework_dedup_rows: int
+    median_pct_divergence: float | None = None
+
+
+class OpQueryVersionsRow(_OpRow):
+    """One default or per-system override slot of ``query_versions.yaml`` (``aisim-op-query-versions/v1``)."""
+
+    scope: str  # "defaults" | "overrides"
+    system: str | None
+    framework: str
+    current: str | None
+    previous: str | None
+
+
+class OpDeclaredReuseRow(_OpRow):
+    """One declared reuse with its donor resolved (``aisim-op-declared-reuse/v1``)."""
+
+    hardware: str
+    family: str
+    framework: str
+    version: str
+    table: str
+    from_version: str | None
+    approved_by: str | None
+    reason: str | None
+    declaration_path: str
+    consumer_manifest: str
+    donor_manifest: str | None
+    donor_configuration_id: str | None
+    donor_table_path: str | None
+    status: str
+
+
+class OpSourceMapRow(_OpRow):
+    """One source-to-destination file mapping (``aisim-op-source-map/v1``)."""
+
+    source_path: str | None
+    destination_path: str
+    kind: str
+    conversion: str
+    hash_basis: str
+    source_sha256: str | None
+    source_bytes: int | None
+    source_git_blob: str | None
+    destination_sha256: str | None
+    destination_bytes: int | None
+    source_content_sha256: str | None
+    destination_content_sha256: str | None
+    rows: int | None
+    hardware: str | None
+    family: str | None
+    framework: str | None
+    version: str | None
+    configuration_id: str | None = None
+
 
 DATA_PREFIX = "data/op-latency"
 REUSE_MANIFEST_NAME = "perf_data_reuse_manifest"

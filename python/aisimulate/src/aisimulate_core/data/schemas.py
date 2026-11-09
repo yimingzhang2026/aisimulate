@@ -32,6 +32,13 @@ from aisimulate_core.data.e2e import (
 )
 from aisimulate_core.data.eval import EvalRecord
 from aisimulate_core.data.gpu_time import GpuTime
+from aisimulate_core.data.op_publish import (
+    OpDeclaredReuseRow,
+    OpLatencyRow,
+    OpQueryVersionsRow,
+    OpReuseManifestRow,
+    OpSourceMapRow,
+)
 
 # Schema ID (as stored in documents) -> model. Add new versions as new entries;
 # never edit an existing entry's meaning.
@@ -50,6 +57,11 @@ SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "aisim-e2e-snapshot-members/v1": SnapshotMember,
     "aisim-eval/v1": EvalRecord,
     "aisim-gpu-time/v1": GpuTime,
+    "aisim-op-declared-reuse/v1": OpDeclaredReuseRow,
+    "aisim-op-latency/v1": OpLatencyRow,
+    "aisim-op-query-versions/v1": OpQueryVersionsRow,
+    "aisim-op-reuse-manifest/v1": OpReuseManifestRow,
+    "aisim-op-source-map/v1": OpSourceMapRow,
 }
 
 PACKAGED_SNAPSHOT_DIR = Path(__file__).parent / "schema_snapshots"

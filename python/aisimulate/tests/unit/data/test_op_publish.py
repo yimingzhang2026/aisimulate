@@ -193,3 +193,26 @@ def test_build_refuses_existing_or_nested_output(tree, tmp_path):
         _build(tree, tmp_path / "exists")
     with pytest.raises(PublishError, match="inside the source"):
         _build(tree, tree / "data/nested")
+
+
+def test_row_models_match_table_columns():
+    from aisimulate_core.data import op_publish as op
+
+    doc = {
+        "groups": [
+            {
+                "op_file": "f",
+                "kernel_source": "k",
+                "tier": "t",
+                "systems": ["s"],
+                "frameworks": ["x"],
+                "total_raw_rows": 1,
+                "within_framework_dedup_rows": 1,
+            }
+        ]
+    }
+    assert set(op.reuse_manifest_table(doc).column_names) == set(op.OpReuseManifestRow.model_fields)
+    qv = {"schema_version": 1, "defaults": {"x": {"current": "1"}}, "overrides": {}}
+    assert set(op.query_versions_table(qv).column_names) == set(op.OpQueryVersionsRow.model_fields)
+    assert set(op._MAP_COLUMNS) == set(op.OpSourceMapRow.model_fields)
+    assert set(op._declared_reuse_table([]).column_names) == set(op.OpDeclaredReuseRow.model_fields)
