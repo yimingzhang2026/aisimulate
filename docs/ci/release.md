@@ -89,6 +89,45 @@ mechanically path-rewritable while AIC remains active. It does not create a
 package boundary: one Maturin manifest collects the Python trees and one Cargo
 manifest compiles the Rust trees. See [AIC synchronization](aic-sync.md).
 
+## Operation data cutover
+
+Moving production operation data from the wheel to the unified Hugging Face dataset is two releases, so a
+rollback always exists. Nothing below is run by CI or by the cutover script: `scripts/release/op_db_cutover.py
+steps` prints the commands for review, and `preflight` only reads evidence.
+
+| Phase | Release contents | Rollback |
+| --- | --- | --- |
+| `flip` | The pin is the default op data source; the packaged data is still in the wheel. | Unset the pin (`AISIM_DATASET`, `AISIM_DATA_LOCAL`, `AISIM_DATA_CATEGORIES`, `AISIM_DATA_OFFLINE`). The packaged path is still there and predictions return to it bit-identically. |
+| `remove` | Production op data leaves the wheel; small test fixtures, specs and profiles stay. | The packaged path is gone: install the flip release (`pip install aisimulate==<flip release>`) or pin the previous immutable dataset revision. |
+
+Until the flip release ships, the opt-in pin (`AISIM_DATASET=ai-dynamo/aisim-data@<40-hex-sha>` with
+`AISIM_DATA_CATEGORIES=fpm,op-latency`, see the [CLI reference](../reference/cli.md#non-python-consumers)) is the
+only switch and changes no default.
+
+**Go/no-go.** `op_db_cutover.py preflight --phase flip|remove` exits 0 only when all of these hold:
+
+1. The parity report from `python/aisimulate/tools/perf_database/op_database_parity.py run` is `ok`: every packaged
+   file has a loaded counterpart with equal bytes or equal Arrow row hash and column types, the lookup YAML is
+   byte-identical, predictions are bit-identical (`max_abs_diff_ms == 0`) for at least 10 usable
+   model/system/backend scenarios, and the offline checks pass.
+2. The rollback drill (`op_database_parity.py drill`) is `ok`: with the pin unset, predictions equal the pinned ones
+   and come from the packaged root.
+3. The pin is a full commit SHA, and the snapshot of that revision has the same `catalog/dataset.json` and
+   `catalog/op-latency.json` SHA-256 as the tree the parity run validated.
+4. A previous release is named for rollback and is never deleted or yanked.
+5. This section is present as the release notes. `flip` also requires the packaged data to still be in the tree;
+   `remove` also requires the flip release as the previous release and a soak evidence file.
+
+Do not flip on a parity failure; fix the data or the loader and rerun. Measured parity numbers of the local tree
+are in `benchmarks/evidence/op-database-parity-20261109/`.
+
+**Release notes (cutover).** The release that flips the default: operation tables are read from a pinned
+`ai-dynamo/aisim-data` revision through `aisimulate_core.data` (verified by SHA-256 and Parquet row count, cached,
+usable offline from a prefetched cache); predictions are unchanged. A missing or corrupt file is an error and never
+falls back to other data. Unset the pin to return to the packaged data. Release N+1 removes the packaged tables
+from the wheel; use `aisimulate data fetch` (or the automatic first-use download below the size threshold) per
+system and framework, or install the previous release.
+
 ## Nightly CI and FPE qualification
 
 Main branch nightly CI builds the approved release surface: one `aisim` wheel per Linux

@@ -78,7 +78,8 @@ export AISIM_DATASET=OWNER/NAME@<40-hex-sha> AISIM_DATA_CACHE=./aisim-cache AISI
 
 `AISIM_DATASET` (with `AISIM_DATA_CACHE` and `AISIM_DATA_OFFLINE`) pins a predictor run: the data a
 configuration needs is taken from the cached revision, a missing or corrupt file is a precise error, and
-there is no fallback to other data. Other pin variables: `AISIM_DATA_CATEGORIES` (default `fpm`),
+there is no fallback to other data. Other pin variables: `AISIM_DATA_CATEGORIES` (default `fpm`; add `op-latency` to also read
+operation tables from the dataset, see [cutover and rollback](../ci/release.md#operation-data-cutover)),
 `AISIM_DATA_CONFIGURATION` (choose among several matches), `AISIM_DATA_MAX_BYTES` (auto-download
 threshold, default 256 MiB) and `AISIM_DATA_LOCAL` (a dataset-layout directory used instead of Hugging Face).
 Private datasets use the standard `HF_TOKEN` only while connected; the cache needs none.
@@ -106,6 +107,15 @@ root = materialize_systems_root(
 
 The root holds the packaged specs and support files plus the verified pinned `data/` tables (hard-linked from
 the cache when possible); it never mixes in packaged tables. The call fails if the destination exists.
+
+To load every operation table of a local dataset-layout tree (for example one built by
+`tools/perf_database/publish_op_latency_tree.py build`) into one root, use
+`aisimulate_core.data.op_tree.load_op_latency_tree(tree, destination)`. It verifies each manifest, copies the
+runtime tables, rebuilds `perf_data_reuse_manifest.yaml` and `query_versions.yaml` byte-for-byte from their Parquet
+tables and copies the packaged specs; the packaged data is not read or changed. The per-configuration path above
+selects one family and version, so a configuration that omits `operation_family` matches several catalog entries and
+fails with `data-conflict`. `tools/perf_database/op_database_parity.py` compares such a root with the packaged
+database before a cutover.
 
 | Consumer | Preparation |
 |---|---|

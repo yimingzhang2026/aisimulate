@@ -1,0 +1,61 @@
+{
+  "phase": "flip",
+  "go": true,
+  "criteria": [
+    {
+      "id": "parity-report",
+      "ok": true,
+      "detail": "report present, schema ok, ok=true"
+    },
+    {
+      "id": "parity-gates",
+      "ok": true,
+      "detail": "rows/lookup/predictions/offline = {'lookup': True, 'offline': True, 'predictions': True, 'rows': True}"
+    },
+    {
+      "id": "prediction-coverage",
+      "ok": true,
+      "detail": "11 usable scenarios (need >= 10), 0 mismatches"
+    },
+    {
+      "id": "prediction-exact",
+      "ok": true,
+      "detail": "max_abs_diff_ms=0.0, loaded root only=True"
+    },
+    {
+      "id": "rows-equal",
+      "ok": true,
+      "detail": "17360711 rows hashed"
+    },
+    {
+      "id": "rollback-drill",
+      "ok": true,
+      "detail": "drill ok"
+    },
+    {
+      "id": "pin-is-full-sha",
+      "ok": true,
+      "detail": "242e71a3f6f68061242506310cdfd9b4a71d53d8"
+    },
+    {
+      "id": "published-equals-validated",
+      "ok": true,
+      "detail": "catalog and op-latency index of the pinned snapshot equal the ones the parity run validated"
+    },
+    {
+      "id": "previous-release-named",
+      "ok": true,
+      "detail": "0.13.0"
+    },
+    {
+      "id": "release-notes-written",
+      "ok": true,
+      "detail": "'## Operation data cutover' section in docs/ci/release.md"
+    },
+    {
+      "id": "flip-keeps-packaged-data",
+      "ok": true,
+      "detail": "packaged op data still in the tree (rollback = unset the pin)"
+    }
+  ]
+}
