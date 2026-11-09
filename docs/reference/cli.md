@@ -28,6 +28,35 @@ and writes additional artifacts after recommendation.
 Unless labeled as captured output, metric values in example results are hypothetical and
 illustrate the output format. Captured detail examples are simulation results, not hardware measurements.
 
+### Fetch dataset files
+
+`aisimulate data fetch` downloads selected dataset files into a local cache ahead of use, so
+later runs need no network. It prints one JSON object on stdout; failures print a message and a
+typed JSON error (`{"error": code, "message": ...}`) on stderr.
+
+```bash
+aisimulate data fetch --repo OWNER/NAME --category fpm --model Qwen/Qwen3-32B --hardware h200_sxm --dry-run
+aisimulate data fetch --repo OWNER/NAME --category fpm --model Qwen/Qwen3-32B --hardware h200_sxm
+```
+
+| Flag | Meaning |
+|---|---|
+| `--category` | Required. `op-latency`, `fpm`, `e2e` or `eval`. Any other category exits `2` with an unsupported message. |
+| `--model`, `--hardware`, `--framework`, `--framework-version`, `--operation-family` | Catalog identity filters. |
+| `--configuration ID` | Select by configuration ID; repeat or comma-separate for several. |
+| `--purpose` | `prediction` (default) selects the data a predictor reads (`op-latency` and `fpm` only); `full-evidence` applies no purpose filter. `validation` and `results` are reserved and exit `2` as unsupported. |
+| `--repo` | Required. Hugging Face dataset repository, `owner/name`. |
+| `--revision` | Branch, tag or commit SHA (default `main`). A ref resolves once to a full SHA, reported as `plan.revision`; the cache is keyed by that SHA. |
+| `--cache-dir` | Cache root. Defaults to `$AISIM_DATA_CACHE`, then the user cache directory. |
+| `--dry-run` | Print the plan (`files`, `total_bytes`, `uncached_bytes`) and download no artifacts. The small catalog and manifest files needed to expand the plan are still cached. |
+| `--offline` | Make no network requests. A missing file fails with `offline-missing` and the list of files; with `--dry-run` the list is reported in `missing` and the exit status is `0`. A non-SHA revision cannot be resolved offline. |
+
+A selection needs `--configuration` or `--hardware`, plus `--model` for `fpm`, `e2e` and `eval`,
+and must match at least one catalog entry; an empty selection is an error, never a whole-repository
+download. Repeating a fetch reuses verified cache entries and downloads nothing. Exit status is `0`
+on success, `2` for an invalid or unsupported selection, and `1` for revision, transfer, integrity
+or offline failures.
+
 <a id="common-options"></a>
 
 ## Common Options

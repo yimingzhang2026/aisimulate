@@ -13,6 +13,7 @@ from typing import Any
 
 import yaml
 
+from .data_parser import add_data_parser
 from .detail import parse_detail_sections
 from .support.cli import add_support_parser
 
@@ -117,6 +118,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="write additional artifacts using an installed output adapter",
     )
     add_support_parser(subparsers)
+    add_data_parser(subparsers)
     return parser
 
 
