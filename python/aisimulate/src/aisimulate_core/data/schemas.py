@@ -21,6 +21,15 @@ from pydantic import BaseModel
 
 from aisimulate_core.data import CategoryIndex, DatasetIndex, Manifest
 from aisimulate_core.data.catalog import CatalogRow, SystemRow
+from aisimulate_core.data.e2e import (
+    E2eInputSnapshot,
+    E2eManifestBody,
+    MetricRow,
+    ObservationRow,
+    RequestRow,
+    SnapshotAcquisition,
+    SnapshotMember,
+)
 from aisimulate_core.data.eval import EvalRecord
 from aisimulate_core.data.gpu_time import GpuTime
 
@@ -32,6 +41,13 @@ SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "aisim-catalog/v1": CatalogRow,
     "aisim-category-index/v1": CategoryIndex,
     "aisim-dataset-index/v1": DatasetIndex,
+    "aisim-e2e-input-snapshot/v1": E2eInputSnapshot,
+    "aisim-e2e-manifest/v1": E2eManifestBody,
+    "aisim-e2e-metrics/v1": MetricRow,
+    "aisim-e2e-observations/v1": ObservationRow,
+    "aisim-e2e-requests/v1": RequestRow,
+    "aisim-e2e-snapshot-acquisition/v1": SnapshotAcquisition,
+    "aisim-e2e-snapshot-members/v1": SnapshotMember,
     "aisim-eval/v1": EvalRecord,
     "aisim-gpu-time/v1": GpuTime,
 }
