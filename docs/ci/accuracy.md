@@ -14,6 +14,50 @@ User-facing coverage is described in [performance-model support](../perf-model/s
 and [Replay features](../replay/features.md). This page owns the jobs, provenance,
 publication, and notifications behind those views.
 
+## Public PR validation
+
+[`pr-validation.yml`](../../.github/workflows/pr-validation.yml) lets a maintainer validate a
+PR that relies on a public Hugging Face candidate. The contributor publishes the candidate as
+an HF PR revision and adds a request file (`aisim-pr-validation/v1`, default path
+`.aisim/pr-validation.json`) to the PR. It names the dataset repository, the full candidate
+commit SHA, the eval record path, configuration IDs, required case IDs and a download budget.
+
+Dispatch the workflow from `main` with the PR number and the head SHA you reviewed. It:
+
+1. checks that the dispatcher is a maintainer and that the PR head equals the dispatched SHA;
+2. reads only the request file from the PR head, through the API, as data. No PR code is
+   checked out or run, there are no secrets, and no Hugging Face token is present;
+3. fetches the selected evidence at the pinned dataset SHA through `data/fetch.py`;
+4. recomputes the evaluation with `verify_record`, using a predictor from the trusted checkout;
+5. writes a report and re-reads the PR head. A moved head fails the run.
+
+Required cases pass only when the record verifies and each case is in the truth table, not
+excluded and predicted. Accuracy (MAPE, coverage) is advisory and never changes the verdict.
+The report (`aisim-pr-validation-report/v1`) binds the PR head SHA (`code_sha`), the
+evaluator revision (trusted checkout SHA plus verifier version), the dataset SHA and the
+request digest. Changing any of them, including editing the request, invalidates it:
+
+```bash
+python -m aisimulate_core.data.validate recheck --pr-json PR.json --repo OWNER/NAME \
+  --request-file request.json --trusted-sha SHA --report report.json   # exit 1 when stale
+```
+
+A Hugging Face outage, rate limit or budget overrun gives an `error` verdict with the reason;
+other data is never substituted. The workflow's predictor factory defaults to
+`aisimulate_core.data.validate:no_predictor`, which fails closed until a trusted factory is
+registered, and the module only loads factories under `aisimulate_core.` or `aisimulate.`.
+
+### Candidate hygiene
+
+`aisimulate_core.data.hygiene` holds the pure checks to run before a candidate reaches any
+workflow: `CandidatePolicy` lists the HF users who may create candidates (empty means nobody),
+file-count and size limits, allowed roots (`data/`, `catalog/`) and suffixes (`.parquet`,
+`.json`). It rejects path traversal, case-colliding paths, control files such as
+`.gitattributes`, symlinks, LFS pointers, executables and archives (even when renamed), Parquet
+files without `PAR1` magic, and JSON that is not strict, finite and small. Any error finding
+means the candidate is not fetched. Callers pass listings and byte samples, so the checks need
+no network.
+
 ## Prediction regression gate
 
 [The workflow](../../.github/workflows/prediction-regression-gate.yml) compares
