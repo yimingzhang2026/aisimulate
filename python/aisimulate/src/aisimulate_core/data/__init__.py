@@ -198,8 +198,12 @@ def check_manifest(root: Path, path: str) -> Manifest:
     manifest = Manifest.model_validate_json(_file(root, path).read_bytes())
     if manifest.configuration_id != configuration_id(manifest.category, manifest.purpose, manifest.identity):
         raise ValueError("configuration identity hash mismatch")
-    if manifest.category != "op-latency":
-        raise ValueError("use the existing category protocol for FPM/E2E manifests")
+    # fpm manifests are execution-profile bundles (the shared-envelope FPM layout);
+    # e2e/eval/systems manifests have no offline checker here yet.
+    if manifest.category not in ("op-latency", "fpm"):
+        raise ValueError("use the existing category protocol for E2E manifests")
+    if manifest.category == "fpm" and manifest.purpose != "execution-profile":
+        raise ValueError("fpm manifests must have purpose execution-profile")
     if manifest.purpose == "operation-tables" and manifest.identity.model is not None:
         raise ValueError("operation table storage must remain model-independent")
     for field in ("artifact_id", "path", "runtime_path"):

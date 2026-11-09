@@ -189,10 +189,10 @@ class FpmLoader(Loader):
     """FPM data through the existing profile machinery.
 
     * ``execution-profile`` manifests go through :func:`prepare_execution_profile`,
-      which verifies, materializes and returns the canonical config. That
-      function currently accepts only manifests stamped ``op-latency`` (the
-      existing protocol), so both stamps are accepted here and the stricter
-      check stays in the shared function.
+      which verifies, materializes and returns the canonical config. Both the
+      ``fpm`` stamp (shared-envelope layout) and the legacy ``op-latency``
+      stamp are accepted; ``check_manifest`` accepts ``fpm`` for
+      ``execution-profile`` manifests.
     * An ``execution-profile`` manifest whose artifacts include one
       ``fpm-profile`` JSON artifact (an FPM model profile) is read with
       :func:`load_fpm_profile` instead.
