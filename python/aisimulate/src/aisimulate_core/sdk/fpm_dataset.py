@@ -40,6 +40,8 @@ class _HubRedirectHandler(HTTPRedirectHandler):
 
 urlopen = build_opener(_HubRedirectHandler()).open
 _SYSTEMS_DIRECTORY = Path(__file__).resolve().parents[1] / "systems"
+# Revision written before the unified dataset is published (see scripts/ci/set_fpm_dataset_pin.py).
+PENDING_REVISION = "0" * 40
 
 
 def _unique_object(pairs):
@@ -224,6 +226,11 @@ def materialize_fpm_profile(
             f"FPM profile {profile!r} is {admission}: historical reproduction only, not serving-admitted{reason}",
             UserWarning,
             stacklevel=2,
+        )
+    if revision == PENDING_REVISION and not local_files_only:
+        raise ValueError(
+            "the FPM dataset pin is still the pending placeholder; set it with "
+            "scripts/ci/set_fpm_dataset_pin.py --revision <commit SHA of the published dataset>"
         )
     cache_identity = {"repo": repo, "revision": revision, "profile": entry}
     system_file = None

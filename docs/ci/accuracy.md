@@ -139,7 +139,9 @@ See [setup, comparisons, and testing](#weekly-accuracy-report).
 ## FPM accuracy
 
 `FPM Accuracy Matrix` runs at 10:47 UTC daily and supports manual evaluation of
-an exact SHA on main or a release >= 0.12.0. It pins HF data once per campaign,
+an exact SHA on main or a release >= 0.12.0. It reads `main` of `ai-dynamo/aisim-data` (FPM under `data/fpm/`),
+pinned to one commit per campaign, so new data reaches the public FPM page with the next nightly run, or
+earlier through a manual dispatch. Configurations are selected from the catalog before any artifact is downloaded. It
 uses verified exact wheels, and evaluates FPM with KV warmup on/off and regression
 on CPU. Branch results remain in Actions artifacts for 90 days. Pages validates
 and publishes successful branch results independently; failed refreshes retain

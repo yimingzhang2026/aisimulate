@@ -20,6 +20,7 @@ from aisimulate_core.data.fetch import (
     SelectionError,
     TransferError,
     fetch,
+    load_category_index,
     plan,
 )
 from aisimulate_core.data.parquet import write_parquet
@@ -346,3 +347,39 @@ def test_corrupt_cache_entry_is_refetched(files, tmp_path):
     with pytest.raises(OfflineMissingError):
         r.paths["fpm/m1/data.parquet"].write_bytes(b"junk")
         fetch(SEL, repo=REPO, revision=SHA, transport=None, cache=c, offline=True)
+
+
+def test_exclude_roles_leaves_those_artifacts_out_of_plan_and_download(files, tmp_path):
+    t = FakeTransport(files)
+    selection = Selection(category="fpm", model="m1", hardware="h200", exclude_roles=("runtime",))
+    result = fetch(selection, repo=REPO, revision="main", transport=t, cache=Cache(tmp_path / "c"))
+    assert {f.path for f in result.plan.files} == {"catalog/dataset.json", "catalog/fpm.json", "fpm/m1/manifest.json"}
+    assert "fpm/m1/data.parquet" not in t.opened
+    assert result.downloaded_bytes == 0
+
+
+def test_load_category_index_reads_only_the_indexes(files, tmp_path):
+    t = FakeTransport(files)
+    sha, index, dataset = load_category_index(
+        "fpm", repo=REPO, revision="main", transport=t, cache=Cache(tmp_path / "c")
+    )
+    assert sha == SHA and dataset.dataset_id == REPO
+    assert {e.identity.model for e in index.entries} == {"m1", "m2"}
+    assert sorted(t.opened) == ["catalog/dataset.json", "catalog/fpm.json"]  # no manifest, no artifact
+    with pytest.raises(OfflineMissingError):
+        load_category_index("fpm", repo=REPO, revision=SHA, cache=Cache(tmp_path / "empty"), offline=True)
+    with pytest.raises(SelectionError):
+        load_category_index("e2e", repo=REPO, revision="main", transport=t, cache=Cache(tmp_path / "c"))
+
+
+def test_fpm_layout_rule_round_trips():
+    from aisimulate_core.data.fpm_layout import logical_path, physical_path
+
+    assert physical_path("data/M--m/h/f/1/tp1/manifest.json") == "data/fpm/M--m/h/f/1/tp1/manifest.json"
+    assert physical_path("data/history/M--m/x") == "data/fpm/history/M--m/x"
+    assert physical_path("data/fpm/M--m/x") == "data/fpm/M--m/x"
+    assert logical_path("data/fpm/history/M--m/x") == "data/history/M--m/x"
+    with pytest.raises(ValueError):
+        physical_path("catalog/dataset.json")
+    with pytest.raises(ValueError):
+        logical_path("data/M--m/x")

@@ -196,6 +196,9 @@ class Selection:
     framework_version: str | None = None
     operation_family: str | None = None
     purpose: str | None = None
+    # Artifact roles to leave out of the plan (for example ``fpm-provenance``,
+    # 75 % of the FPM bytes, which no evaluation reads). Manifests are still read.
+    exclude_roles: tuple[str, ...] = ()
 
     def validate(self) -> None:
         if not self.configuration_ids:
@@ -491,7 +494,8 @@ def plan(
         if manifest.configuration_id != entry.configuration_id:
             raise IntegrityError(entry.manifest.path, "manifest configuration ID differs from the catalog entry")
         for artifact in manifest.artifacts:
-            planner._add(_ref(artifact, "artifact"))
+            if artifact.role not in selection.exclude_roles:
+                planner._add(_ref(artifact, "artifact"))
     out.files.sort(key=lambda f: f.path)
     if offline:
         out.missing = sorted({*out.missing, *(f.path for f in out.files if not f.cached)})
@@ -543,6 +547,45 @@ def fetch(
         f.cached = True
     paths = {f.path: cache.path_for(repo, sha, f.path) for f in result_plan.files}
     return FetchResult(plan=result_plan, root=cache.commit_root(repo, sha), paths=paths, downloaded_bytes=downloaded)
+
+
+def load_category_index(
+    category: Category,
+    *,
+    repo: str,
+    revision: str,
+    transport: Transport | None = None,
+    cache: Cache | None = None,
+    offline: bool = False,
+) -> tuple[str, CategoryIndex, DatasetIndex]:
+    """Resolve ``revision`` once and read the dataset and category indexes (a few KB).
+
+    Returns ``(full_sha, category_index, dataset_index)``. Use it to choose
+    configuration IDs before any artifact is planned or downloaded.
+    """
+    cache = cache or Cache()
+    sha = resolve_revision(transport, repo, revision, offline=offline)
+    out = FetchPlan(repo=repo, revision=sha, requested_revision=revision, offline=offline)
+    planner = _Planner(transport, cache, out)
+
+    def parse(model, raw: bytes | None, path: str):
+        if raw is None:
+            raise OfflineMissingError([path])
+        try:
+            return model.model_validate_json(raw)
+        except ValidationError as exc:
+            raise IntegrityError(path, f"invalid {model.__name__}: {exc.error_count()} error(s)") from exc
+
+    dataset = parse(
+        DatasetIndex,
+        planner.read(PlannedFile(DATASET_INDEX_PATH, None, None, "catalog", False)),
+        DATASET_INDEX_PATH,
+    )
+    reference = dataset.categories.get(category)
+    if reference is None:
+        raise SelectionError(f"dataset has no {category!r} category")
+    index = parse(CategoryIndex, planner.read(_ref(reference.index, "index")), reference.index.path)
+    return sha, index, dataset
 
 
 def clear_cache(cache: Cache, repo: str, sha: str) -> None:
