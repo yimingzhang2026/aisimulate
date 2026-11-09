@@ -20,6 +20,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from aisimulate_core.data import CategoryIndex, DatasetIndex, Manifest
+from aisimulate_core.data.eval import EvalRecord
 
 # Schema ID (as stored in documents) -> model. Add new versions as new entries;
 # never edit an existing entry's meaning.
@@ -27,6 +28,7 @@ SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "aisim-artifact-manifest/v1": Manifest,
     "aisim-category-index/v1": CategoryIndex,
     "aisim-dataset-index/v1": DatasetIndex,
+    "aisim-eval/v1": EvalRecord,
 }
 
 PACKAGED_SNAPSHOT_DIR = Path(__file__).parent / "schema_snapshots"
