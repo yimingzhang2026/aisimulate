@@ -78,6 +78,22 @@
     "Identity": {
       "additionalProperties": false,
       "properties": {
+        "deployment": {
+          "anyOf": [
+            {
+              "enum": [
+                "aggregated",
+                "disaggregated"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Deployment"
+        },
         "effective_settings": {
           "additionalProperties": {
             "$ref": "#/$defs/JsonValue"
@@ -118,6 +134,51 @@
             }
           ],
           "title": "Operation Family"
+        },
+        "parallelism": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parallelism"
+        },
+        "parallelism_complete": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parallelism Complete"
+        },
+        "precision": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Precision"
         },
         "unresolved_identity": {
           "anyOf": [
@@ -163,7 +224,9 @@
       "enum": [
         "op-latency",
         "fpm",
-        "e2e"
+        "e2e",
+        "eval",
+        "systems"
       ],
       "title": "Category",
       "type": "string"
@@ -196,7 +259,10 @@
     "purpose": {
       "enum": [
         "operation-tables",
-        "execution-profile"
+        "execution-profile",
+        "e2e-configuration",
+        "evaluation-record",
+        "system-spec"
       ],
       "title": "Purpose",
       "type": "string"
