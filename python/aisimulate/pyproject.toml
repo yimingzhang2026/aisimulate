@@ -154,6 +154,7 @@ include = [
     { path = "collector/fpm_forward/runtime/glm53flash/LICENSE", format = "wheel" },
     # Ship estimator models and profiles with their canonical implementation.
     "src/aisimulate_core/sdk/**/*.md",
+    "src/aisimulate_core/data/schema_snapshots/*.json",
     "src/aisimulate_core/systems/*.yaml",
     "src/aisimulate_core/systems/*.csv",
     "src/aisimulate_core/systems/**/*.csv",
