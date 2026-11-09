@@ -379,7 +379,12 @@ def _verify_file(local: Path, path: str, expected: PlannedFile) -> None:
             rows = pq.ParquetFile(local).metadata.num_rows
         except Exception as exc:
             raise IntegrityError(path, f"unreadable Parquet: {exc}") from exc
-        if expected.schema is not None and schema_id != expected.schema:
+        # A file published before schema stamping (the byte-identical FPM libraries) has no embedded ID;
+        # it can only declare an external schema, never an aisim-* one.
+        unstamped_external = (
+            schema_id is None and expected.schema is not None and not expected.schema.startswith("aisim-")
+        )
+        if expected.schema is not None and schema_id != expected.schema and not unstamped_external:
             raise IntegrityError(path, f"schema ID {schema_id!r} != declared {expected.schema!r}")
         if expected.rows is not None and rows != expected.rows:
             raise IntegrityError(path, f"row count {rows} != declared {expected.rows}")
