@@ -1,5 +1,4 @@
 {
   "repo_id": "ai-dynamo/aisim-data",
-  "revision": "0000000000000000000000000000000000000000",
-  "note": "PENDING until the unified dataset is published: run `python scripts/ci/set_fpm_dataset_pin.py --revision <full commit SHA>` to set every FPM consumer pin in one step"
+  "revision": "07f0080d1ab09d36c7f8b4197b5b8b6e7490cd5b"
 }

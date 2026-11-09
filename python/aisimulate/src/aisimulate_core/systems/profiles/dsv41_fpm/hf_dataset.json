@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "repo_id": "ai-dynamo/aisim-data",
-  "revision": "0000000000000000000000000000000000000000",
+  "revision": "07f0080d1ab09d36c7f8b4197b5b8b6e7490cd5b",
   "profiles": {
     "b300_sxm-tp2-decoder_bounded": {
       "admission": "serving",
