@@ -165,6 +165,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_READ_AISIM_INFX_CACHE }}
           HF_HOME: ${{ runner.temp }}/accuracy-hf
+          AISIM_DATA_CACHE: ${{ runner.temp }}/accuracy-data
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           python scripts/e2e_accuracy/fetch_accuracy_measurements.py \
