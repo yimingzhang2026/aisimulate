@@ -1095,7 +1095,7 @@ def _materialize_engine_execution_spec(
         raw_decode = _required_engine_args(deployment.decode_engine_args, "decode")
         # Check both roles before either one estimates capacity.
         for raw, role in ((raw_prefill, "prefill"), (raw_decode, "decode")):
-            _reject_role_pipeline_parallelism(deployment.parallel_config, raw, role)
+            _reject_role_pipeline_parallelism(deployment.parallel_config, raw, role, deployment.backend)
         prefill = _materialize_engine_role(
             deployment.backend,
             deployment.backend_version,
@@ -1157,6 +1157,9 @@ def _materialize_engine_execution_spec(
     if max_sim_time_ms is not None:
         max_sim_time_ms = _nonnegative_time(max_sim_time_ms, "max_sim_time_ms")
 
+    placement_config: dict[str, JSONValue] | None = None
+    if deployment_mode == "disagg" and raw_decode.get("load_balance_method") is not None:
+        placement_config = {"load_balance_method": raw_decode["load_balance_method"]}
     execution_spec: dict[str, JSONValue] = {
         "version": 1,
         "topology": topology,
@@ -1164,7 +1167,7 @@ def _materialize_engine_execution_spec(
         "adapters": {
             "placement": {
                 "provider": "round_robin",
-                "config": None,
+                "config": placement_config,
             },
             "scaling": {
                 "provider": "none",
@@ -1528,7 +1531,7 @@ def materialize_engine_launch_config(
 
 
 def _reject_role_pipeline_parallelism(
-    parallel_config: Mapping[str, JSONValue], role_config: Mapping[str, JSONValue], role: str
+    parallel_config: Mapping[str, JSONValue], role_config: Mapping[str, JSONValue], role: str, backend: str
 ) -> None:
     # `rank: null` falls back to the flat role fields during materialization.
     rank = role_config.get("rank")
@@ -1551,6 +1554,7 @@ def _reject_role_pipeline_parallelism(
             for value in (timing_config.get("pp", 1), timing_config.get("pp_size", 1))
             if value != UNKNOWN_IDENTITY
         ),
+        backend=backend,
     )
 
 
@@ -1569,7 +1573,7 @@ def _materialize_engine_role(
     # New generic schemes use caller-authored capacity; leave the existing
     # Ngram/NextN capacity paths unchanged.
     requested_rank = role_config.get("rank", role_config)
-    _reject_role_pipeline_parallelism(parallel_config, role_config, role)
+    _reject_role_pipeline_parallelism(parallel_config, role_config, role, deployment_backend)
     if isinstance(requested_rank, Mapping):
         timing = requested_rank.get("timing_model")
         timing_config = timing.get("config", {}) if isinstance(timing, Mapping) else {}
@@ -1668,6 +1672,7 @@ def _materialize_engine_role(
             )
     role_config.pop("worker_type", None)
     role_config.pop("startup_time", None)
+    role_config.pop("load_balance_method", None)
     model = role_config.pop("aic_model_path", None)
     system = role_config.pop("aic_system", None)
     # Capacity-only input. It has already been consumed by the Python AIC
