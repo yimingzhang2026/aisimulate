@@ -221,7 +221,7 @@ def test_inferencex_metrics_every_statistic_zero_vs_missing(tmp_path):
     assert by_key[("output_throughput", "value")].device_count == 8
     assert by_key[("interactivity", "mean")].normalization == "per_user"
     # Unmapped metrics are not invented; they stay in the raw artifact and are noted verbatim.
-    assert ds.body.source_fields["unmapped_metrics"] == {"123": ["weird_metric"]}
+    assert ds.body.source_fields["unmapped_metrics"] == ["weird_metric"]
     raw = read_provenance(tmp_path, next(a for a in ds.manifest.artifacts if a.role == "raw-output"))
     assert b"weird_metric" in raw
     assert ds.body.source_fields["decode_dp_attention"] is False  # booleans never become degrees

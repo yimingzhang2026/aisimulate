@@ -610,12 +610,16 @@ def _write_table(root: Path, directory: str, name: str, schema_id: str, rows: Se
     )
 
 
-def write_configuration(root: Path, data: E2eConfigurationData) -> str:
-    """Write tables, provenance artifacts and the envelope manifest; return the manifest path."""
+def write_configuration(root: Path, data: E2eConfigurationData, *, prefix: str = "") -> str:
+    """Write tables, provenance artifacts and the envelope manifest; return the manifest path.
+
+    ``prefix`` (e.g. ``"data"``) is prepended to the configuration directory, so
+    every path stays relative to the dataset root.
+    """
     root = Path(root)
     body = data.body
     cid = body.configuration_id()
-    directory = configuration_dir(body)
+    directory = f"{prefix.strip('/')}/{configuration_dir(body)}" if prefix else configuration_dir(body)
     if not data.observations:
         raise ValueError("a configuration needs at least one observation")
     known = {o.observation_id for o in data.observations}
@@ -847,8 +851,8 @@ def read_snapshot(root: Path, path: str) -> tuple[E2eInputSnapshot, list[Snapsho
 
 # --------------------------------------------------------------------------- InferenceX converter
 
-_IFX_LATENCY = re.compile(r"^(?P<stat>mean|median|std|min|max|p\d+(?:_\d+)?)_(?P<metric>ttft|tpot|itl|e2el)$")
-_IFX_INTERACTIVITY = re.compile(r"^(?P<stat>mean|median|std|min|max|p\d+(?:_\d+)?)_intvty$")
+_IFX_LATENCY = re.compile(r"^(?P<stat>mean|median|std|min|max|p\d+(?:[._]\d+)?)_(?P<metric>ttft|tpot|itl|e2el)$")
+_IFX_INTERACTIVITY = re.compile(r"^(?P<stat>mean|median|std|min|max|p\d+(?:[._]\d+)?)_intvty$")
 _IFX_THROUGHPUT = {
     "tput_per_gpu": "total_throughput",
     "output_tput_per_gpu": "output_throughput",
@@ -877,7 +881,7 @@ INFERENCEX_LATENCY_UNIT = "s"  # InferenceX reports latencies in seconds
 
 
 def _stat(name: str) -> str:
-    return name.replace("_", ".") if re.fullmatch(r"p\d+_\d+", name) else name
+    return name.replace("_", ".") if re.fullmatch(r"p\d+_\d+", name) else name  # p99_9 and p99.9 both -> p99.9
 
 
 def inferencex_metrics(
@@ -928,20 +932,58 @@ def inferencex_metrics(
                     source_name=key,
                 )
             )
+        elif re.fullmatch(r"(?:(?:prefill|decode)_)?(?:pp|pcp_size|dcp_size)", key):
+            continue  # a parallelism degree: mapped by inferencex_metric_parallelism, kept in the raw artifact
         else:
             unmapped.append(key)
     rows.extend(missing_required_metrics(observation_id, rows))
     return rows, unmapped
 
 
-def _ifx_body(config: Mapping[str, Any], gaps: list[dict]) -> E2eManifestBody:
+# InferenceX reports pipeline/context parallel degrees inside the ``metrics`` dict, not in the
+# configuration row. They are deployment facts, so they map to parallelism dimensions.
+_IFX_METRIC_DIMENSIONS = {"pp": "pp", "pcp_size": "cp", "dcp_size": "dcp"}
+
+
+def inferencex_metric_parallelism(raw: Mapping[str, Any]) -> dict[str, dict[str, int]]:
+    """Parallelism degrees an InferenceX record reports under ``metrics`` (aggregated or per role)."""
+    metrics = raw.get("metrics") or {}
+    out: dict[str, dict[str, int]] = {}
+    roles = ("prefill", "decode") if raw.get("disagg") else ("aggregated",)
+    for role in roles:
+        dims = {}
+        for key, dim in _IFX_METRIC_DIMENSIONS.items():
+            # Aggregated records use the plain key, or the decode_* key when only that is reported.
+            names = (key, f"decode_{key}") if role == "aggregated" else (f"{role}_{key}",)
+            for name in names:
+                degree = metrics.get(name)
+                if isinstance(degree, int) and not isinstance(degree, bool) and degree > 0:
+                    dims[dim] = degree
+                    break
+        if dims:
+            out[role] = dims
+    return out
+
+
+def _ifx_body(
+    config: Mapping[str, Any], gaps: list[dict], metric_parallelism: Mapping[str, Mapping[str, int]] | None = None
+) -> E2eManifestBody:
     disagg = bool(config["disagg"])
     roles = ("prefill", "decode") if disagg else ("decode",)
     # Aggregated InferenceX records carry the serving worker under the decode_* fields.
-    parallelism = {
-        ("aggregated" if not disagg else role): {"tp": config[f"{role}_tp"], "ep": config[f"{role}_ep"]}
-        for role in roles
-    }
+    parallelism: dict[str, dict[str, int]] = {}
+    for role in roles:
+        label = "aggregated" if not disagg else role
+        dims = {}
+        for dim in ("tp", "ep"):
+            degree = config[f"{role}_{dim}"]
+            if isinstance(degree, int) and not isinstance(degree, bool) and degree > 0:
+                dims[dim] = degree
+            else:
+                # A zero or missing degree is "not reported", never a real degree: keep it out of the identity.
+                gaps.append({"field": f"parallelism.{label}.{dim}", "reason": f"source reported {degree!r}"})
+        dims.update((metric_parallelism or {}).get(label, {}))
+        parallelism[label] = dims
     workers = {
         ("aggregated" if not disagg else role): WorkerGroup(
             num_workers=config.get(f"{role}_num_workers"),
@@ -953,7 +995,11 @@ def _ifx_body(config: Mapping[str, Any], gaps: list[dict]) -> E2eManifestBody:
         [
             {"field": "framework_version", "reason": "InferenceX reports an image, not a framework version"},
             {"field": "model_revision", "reason": "not reported by the source"},
-            {"field": "parallelism", "reason": "pp and dp degrees are not reported; dp_attention kept verbatim"},
+            {
+                "field": "parallelism",
+                "reason": "pp, cp and dcp come from the record's metrics keys when present; dp degrees are not "
+                "reported; dp_attention kept verbatim",
+            },
         ]
     )
     settings = {
@@ -972,8 +1018,14 @@ def _ifx_body(config: Mapping[str, Any], gaps: list[dict]) -> E2eManifestBody:
         parallelism=parallelism,
         parallelism_complete=False,
         precision={"weights": config["precision"]},
+        # Identity rule "inferencex-identity/1": every source field that distinguishes upstream
+        # deployments (booleans stay booleans, never degrees) so distinct source configurations
+        # never share a configuration ID. Run telemetry (``workers`` GPU stats) is not identity.
         identity_settings={
             "spec_method": config["spec_method"],
+            "is_multinode": config["is_multinode"],
+            "dp_attention": {role: config[f"{role}_dp_attention"] for role in ("prefill", "decode")},
+            "offload_mode": config.get("offload_mode"),
             "workers": {k: v.model_dump(exclude_none=True) for k, v in sorted(workers.items())},
         },
         settings=settings,
@@ -995,7 +1047,13 @@ def inferencex_to_configurations(
 
     Each raw record is kept unchanged (canonical JSON) as a hash-linked raw-output
     artifact, so a mapping error is fixed by re-normalizing. ``runs`` optionally
-    maps a ``run_url`` to producer metadata (``head_sha``, ``run_attempt``).
+    maps a ``run_url`` to producer metadata (``head_sha``, ``run_attempt``,
+    ``run_started_at``, ``head_branch``, ...); it is kept verbatim under
+    ``source_fields["producer_runs"]`` because ordering and freshness decisions need it.
+
+    Upstream source configurations (content hash ``hf:<sha256>``, kept per
+    observation as ``source_config_id``) that differ only in run telemetry share one
+    ``configuration_id`` and are merged into one configuration directory.
     """
     runs = runs or {}
     grouped: dict[str, list[Mapping[str, Any]]] = {}
@@ -1003,19 +1061,31 @@ def inferencex_to_configurations(
         config = {key: raw[key] for key in INFERENCEX_CONFIG_FIELDS}
         config.update({key: raw[key] for key in ("offload_mode", "workers") if key in raw})
         grouped.setdefault(_sha(_canonical(config)), []).append(raw)
-    out = []
+    merged: dict[str, E2eConfigurationData] = {}
+    subgroups: list[tuple[str, str, dict, list[Mapping[str, Any]]]] = []
     for source_config, group in sorted(grouped.items()):
+        by_dims: dict[str, tuple[dict, list[Mapping[str, Any]]]] = {}
+        for raw in group:
+            dims = inferencex_metric_parallelism(raw)
+            by_dims.setdefault(_sha(_canonical(dims)), (dims, []))[1].append(raw)
+        subgroups.extend((source_config, key, dims, rows) for key, (dims, rows) in sorted(by_dims.items()))
+    for source_config, _dims_key, dims, group in subgroups:
         first = group[0]
-        body = _ifx_body({**first, "config_id": "hf:" + source_config}, [])
+        body = _ifx_body({**first, "config_id": "hf:" + source_config}, [], dims)
         cid = body.configuration_id()
         observations, metrics, provenance = [], [], []
+        unmapped_keys: set[str] = set()
+        producer_runs: dict[str, Any] = {}
         gpus = (first.get("num_prefill_gpu") or 0) + (first.get("num_decode_gpu") or 0)
         for raw in sorted(group, key=lambda r: int(r["id"])):
             canonical = _canonical(raw)
             oid = f"inferencex:{raw['id']}"
             rows, unmapped = inferencex_metrics(oid, raw.get("metrics") or {}, gpus or None)
             metrics.extend(rows)
+            unmapped_keys.update(unmapped)
             run = runs.get(raw.get("run_url") or "", {})
+            if run:
+                producer_runs[raw["run_url"]] = dict(run)
             raw_item = ProvenanceFile(
                 "raw-output", canonical, oid, name=f"inferencex-{raw['id']}", source_tool="inferencex"
             )
@@ -1045,10 +1115,29 @@ def inferencex_to_configurations(
                 )
             )
             provenance.append(raw_item)
-            if unmapped:
-                body.source_fields.setdefault("unmapped_metrics", {})[str(raw["id"])] = unmapped  # type: ignore[index]
-        out.append(E2eConfigurationData(body, observations, metrics, [], provenance))
-    return out
+        existing = merged.get(cid)
+        if existing is None:
+            body.source_config_id = "hf:" + source_config
+            if unmapped_keys:
+                body.source_fields["unmapped_metrics"] = sorted(unmapped_keys)
+            if producer_runs:
+                body.source_fields["producer_runs"] = producer_runs  # type: ignore[assignment]
+            merged[cid] = E2eConfigurationData(body, observations, metrics, [], provenance)
+            continue
+        target = existing.body
+        ids = set(target.source_fields.get("source_config_ids", [target.source_config_id]))  # type: ignore[arg-type]
+        ids.add("hf:" + source_config)
+        target.source_config_id = None
+        target.source_fields["source_config_ids"] = sorted(ids)  # type: ignore[assignment]
+        if unmapped_keys:
+            union = set(target.source_fields.get("unmapped_metrics", [])) | unmapped_keys  # type: ignore[arg-type]
+            target.source_fields["unmapped_metrics"] = sorted(union)  # type: ignore[assignment]
+        if producer_runs:
+            target.source_fields.setdefault("producer_runs", {}).update(producer_runs)  # type: ignore[union-attr]
+        existing.observations.extend(observations)
+        existing.metrics.extend(metrics)
+        existing.provenance.extend(provenance)
+    return [merged[cid] for cid in sorted(merged)]
 
 
 # --------------------------------------------------------------------------- developer (AIPerf) converter
