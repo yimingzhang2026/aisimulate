@@ -110,3 +110,9 @@ def test_drift_is_detected(tmp_path):
 
 def test_check_on_missing_dir(tmp_path):
     assert len(check_snapshots(tmp_path / "nope")) == len(SCHEMA_MODELS)
+
+
+def test_gpu_time_schema_registered():
+    from aisimulate_core.data.schemas import SCHEMA_MODELS
+
+    assert "aisim-gpu-time/v1" in SCHEMA_MODELS

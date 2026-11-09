@@ -128,3 +128,75 @@ def test_tres_untyped_and_typed_not_double_counted():
     row = "5|b|COMPLETED||||60|00:01:00|1|gres/gpu=8,gres/gpu:b200=8,node=1"
     t = gpu_time_from_sacct(_sacct(row))
     assert (t.gpu_count, t.gpu_type) == (8, "b200")
+
+
+# ------------------------------------------------------------------ Kubernetes
+
+
+def _pod(name, phase, start, end, gpus="4"):
+    status = {"phase": phase, "startTime": "2026-11-07T00:00:00Z"}
+    if start:
+        status["containerStatuses"] = [{"state": {"terminated": {"startedAt": start, "finishedAt": end}}}]
+    return {
+        "metadata": {"name": name},
+        "spec": {"containers": [{"resources": {"requests": {"nvidia.com/gpu": gpus}}}]},
+        "status": status,
+    }
+
+
+class _FakeKube:
+    def __init__(self, job, pods):
+        self.job, self.pods = job, pods
+
+    def get_job(self, namespace, name):
+        return self.job
+
+    def list_job_pods(self, namespace, job_name):
+        return self.pods
+
+
+_JOB = {
+    "metadata": {"name": "bench", "namespace": "ns"},
+    "spec": {"template": {"spec": {"containers": [{"resources": {"limits": {"nvidia.com/gpu": "4"}}}]}}},
+    "status": {"succeeded": 1, "startTime": "2026-11-07T00:10:00Z", "completionTime": "2026-11-07T00:20:00Z"},
+}
+
+
+def test_kubernetes_capture_excludes_queue_wait_and_splits_failed():
+    from aisimulate_core.data.gpu_time import capture_gpu_time_kubernetes
+
+    pods = [
+        _pod("p0", "Failed", "2026-11-07T00:01:00Z", "2026-11-07T00:02:00Z"),
+        _pod("p1", "Succeeded", "2026-11-07T00:10:00Z", "2026-11-07T00:20:00Z"),
+    ]
+    gt = capture_gpu_time_kubernetes(_FakeKube(_JOB, pods), "ns", "bench", gpu_type="h100")
+    assert gt.authority == "measured" and gt.gpu_count == 4 and gt.gpu_type == "h100"
+    assert gt.wall_seconds == 600 and gt.gpu_seconds == 2400
+    assert gt.failed.count == 1 and gt.failed.gpu_seconds == 240
+    assert gt.source["source"] == "kubernetes"
+
+
+def test_kubernetes_falls_back_to_job_times_and_template_gpus():
+    from aisimulate_core.data.gpu_time import gpu_time_from_kubernetes
+
+    pod = {"metadata": {"name": "p"}, "status": {"phase": "Succeeded"}}
+    gt = gpu_time_from_kubernetes(_JOB, [pod])
+    assert gt.wall_seconds == 600 and gt.gpu_count == 4
+
+
+@pytest.mark.parametrize(
+    "job,pods",
+    [
+        ({**_JOB, "status": {}}, [_pod("p", "Succeeded", "2026-11-07T00:00:00Z", "2026-11-07T00:01:00Z")]),
+        (_JOB, [_pod("p", "Running", None, None)]),
+        (_JOB, [_pod("p", "Failed", "2026-11-07T00:00:00Z", "2026-11-07T00:01:00Z")]),
+        (_JOB, [_pod("p", "Succeeded", "2026-11-07T00:00:00Z", "2026-11-07T00:01:00Z", gpus="0")]),
+    ],
+)
+def test_kubernetes_rejects_unfinished_or_gpu_less(job, pods):
+    from aisimulate_core.data.gpu_time import KubeParseError, gpu_time_from_kubernetes
+
+    if pods[0]["spec"]["containers"][0]["resources"]["requests"]["nvidia.com/gpu"] == "0":
+        job = {**job, "spec": {}}
+    with pytest.raises(KubeParseError):
+        gpu_time_from_kubernetes(job, pods)

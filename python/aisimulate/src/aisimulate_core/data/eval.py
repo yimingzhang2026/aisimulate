@@ -29,6 +29,7 @@ import pyarrow as pa
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from aisimulate_core.data import Artifact, Digest, Identity
+from aisimulate_core.data.gpu_time import Finding, GpuTime, check_gpu_time, gpu_time_ok
 from aisimulate_core.data.parquet import read_parquet, write_parquet
 
 EVAL_SCHEMA_ID = "aisim-eval/v1"
@@ -155,26 +156,6 @@ class Assumption(_Record):
     kind: Literal["truth", "calibration"]
 
 
-class GpuTime(_Record):
-    """GPU cost of the truth collection. Allocated time, queue wait excluded."""
-
-    authority: Literal["measured", "declared", "unknown"]
-    gpu_type: str | None = None
-    gpu_count: int | None = Field(default=None, ge=1)
-    wall_seconds: float | None = Field(default=None, ge=0)
-    gpu_seconds: float | None = Field(default=None, ge=0)  # wall x GPUs
-    phase_seconds: dict[str, float] | None = None  # setup/warmup/measure/teardown
-    failed_attempt_gpu_seconds: float | None = Field(default=None, ge=0)
-
-    @model_validator(mode="after")
-    def unknown_is_null(self):
-        if self.authority == "unknown" and any(
-            v is not None for v in (self.wall_seconds, self.gpu_seconds, self.gpu_count)
-        ):
-            raise ValueError("authority 'unknown' must leave GPU time null, never a number")
-        return self
-
-
 class SimulationCost(_Record):
     wall_seconds: float | None = Field(default=None, ge=0)
     gpu_seconds: float = Field(default=0.0, ge=0)  # prediction needs no GPU
@@ -200,7 +181,7 @@ class EvalRecord(_Record):
     truth: TruthIdentity
     results: Results
     assumptions: list[Assumption]
-    gpu_time: GpuTime
+    gpu_time: GpuTime | None = None  # absent is missing, not zero; see check_record_gpu_time
     simulation_cost: SimulationCost
     producer: Producer
     tier: Tier
@@ -219,11 +200,19 @@ class EvalRecord(_Record):
             raise ValueError(f"tier {self.tier!r} requires a verification block")
         if self.verification and self.verification.recomputed_fingerprint != self.prediction.fingerprint:
             raise ValueError("verification fingerprint differs from the record's prediction fingerprint")
+        errors = [f.message for f in check_record_gpu_time(self) if f.severity == "error"]
+        if errors:
+            raise ValueError(f"qualified record needs gpu_time: {errors[0]}")
         return self
 
     @property
     def record_id(self) -> str:
         return record_id(self)
+
+
+def check_record_gpu_time(record: EvalRecord) -> list[Finding]:
+    """``gpu_time`` findings: errors for qualified records, warnings otherwise (archival)."""
+    return check_gpu_time(record.gpu_time, "qualification" if record.tier == "qualified" else "archival")
 
 
 # --- content addressing and storage -----------------------------------------
@@ -502,9 +491,12 @@ def attest(record: EvalRecord, report: VerificationReport, tier: Tier = "verifie
 __all__ = [
     "EVAL_SCHEMA_ID",
     "EvalRecord",
+    "GpuTime",
     "attest",
+    "check_record_gpu_time",
     "compute_results",
     "current_records",
+    "gpu_time_ok",
     "load_record",
     "prediction_fingerprint",
     "record_id",

@@ -140,3 +140,36 @@ def test_immutability_and_supersede_rules(built):
         EvalRecord.model_validate({**record.model_dump(by_alias=True), "tier": "verified"})
     with pytest.raises(ValueError):
         EvalRecord.model_validate({**record.model_dump(by_alias=True), "status": "failed"})
+
+
+def test_eval_uses_gpu_time_module_type():
+    from aisimulate_core.data import gpu_time
+
+    assert GpuTime is gpu_time.GpuTime
+
+
+def test_record_gpu_time_archival_warns_qualified_errors(built):
+    from aisimulate_core.data.eval import check_record_gpu_time
+
+    _, record = built
+    unknown = check_record_gpu_time(record)
+    assert [(f.severity, f.code) for f in unknown] == [("warn", "gpu_time.missing")]
+    absent = record.model_copy(update={"gpu_time": None})
+    assert check_record_gpu_time(absent)[0].severity == "warn"
+    doc = record.model_dump(by_alias=True)
+    doc["gpu_time"] = None
+    doc.update(
+        tier="qualified",
+        verification={
+            "verifier_version": "1",
+            "recomputed_fingerprint": record.prediction.fingerprint,
+            "verified_record_id": record.record_id,
+        },
+    )
+    with pytest.raises(ValueError, match="qualified record needs gpu_time"):
+        EvalRecord.model_validate(doc)
+    doc["gpu_time"] = GpuTime(authority="unknown").model_dump(by_alias=True)
+    with pytest.raises(ValueError, match="qualified record needs gpu_time"):
+        EvalRecord.model_validate(doc)
+    doc["gpu_time"] = GpuTime(authority="measured", gpu_count=4, wall_seconds=0.0).model_dump(by_alias=True)
+    assert EvalRecord.model_validate(doc).tier == "qualified"  # zero is recorded, not missing
