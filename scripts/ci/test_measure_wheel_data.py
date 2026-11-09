@@ -7,7 +7,7 @@ import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-import measure_wheel_data as m  # noqa: E402
+import measure_wheel_data as m
 
 
 def test_summarize_separates_op_data():
