@@ -15,7 +15,7 @@ from cryptography.exceptions import InvalidTag
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python" / "aisimulate" / "src"))
-from aisimulate_core.data.fetch import Cache  # noqa: E402  (checkout source; no native extension needed)
+from aisimulate_core.data.fetch import Cache
 from scripts.e2e_accuracy import hf_measurements as hf
 from scripts.e2e_accuracy import private_artifacts
 from scripts.e2e_accuracy.source import hf_bindings
