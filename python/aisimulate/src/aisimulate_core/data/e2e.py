@@ -9,12 +9,20 @@ specializes the shared envelope (``aisim-artifact-manifest/v1``, category
 
 * **Manifest body** (``aisim-e2e-manifest/v1``) lives in ``provenance["e2e"]`` of
   the envelope. A fixed identity core (model, deployment, hardware, framework,
-  parallelism, precision) is mirrored into the envelope ``Identity`` so
-  ``configuration_id`` and the existing catalog checks keep working. An open
-  ``settings`` map carries every other effective setting with an authority tag
-  and never changes identity.
+  parallelism, precision) and the deployment facts that tell otherwise equal
+  deployments apart (``dp_attention`` per role as a boolean, ``multinode``,
+  ``offload_mode``; identity hash v3, see :func:`aisimulate_core.data.configuration_id`)
+  is mirrored into the envelope ``Identity`` so ``configuration_id`` and the
+  existing catalog checks keep working. Parallelism degrees a tool reports as
+  metrics (``pp``, ``pcp_size`` -> ``cp``, ``dcp_size`` -> ``dcp``) are identity
+  dimensions too. An open ``settings`` map carries every other effective setting
+  with an authority tag and never changes identity; ``identity_settings`` is the
+  versioned open part of the identity (speculation method, worker counts).
 * **Observations** (``aisim-e2e-observations/v1``): one row per benchmark point
-  per producer run.
+  per producer run. Source fields without a canonical home are typed columns, so a
+  source-agnostic reader never needs the raw artifact: ``recipe_fingerprint``,
+  ``source_config_json`` (the upstream configuration record) and
+  ``unmapped_metrics_json`` (source metrics without a metric row), verbatim.
 * **Metrics** (``aisim-e2e-metrics/v1``): one row per metric/statistic/scope in
   canonical units (ms, tokens/s) with explicit normalization and a
   ``valid|missing|invalid`` status. Missing is a null value, never zero.
@@ -22,6 +30,10 @@ specializes the shared envelope (``aisim-artifact-manifest/v1``, category
 * **Input snapshot** (``aisim-e2e-input-snapshot/v1``): frozen membership.
 * **Provenance artifacts**: raw tool output and logs, gzip-compressed,
   hash-linked from the manifest, tier 3, size-capped, with a redaction flag.
+  A configuration with many observations stores its raw records in one
+  ``raw-output-bundle`` (one record per line); each observation keeps the byte
+  range (``raw_offset``, ``raw_length``) and the SHA-256 (``record_sha256``) of
+  its own record, so every row stays individually auditable.
 
 All tables are Parquet+zstd written through :mod:`aisimulate_core.data.parquet`.
 Offline only; no network access.
@@ -81,6 +93,8 @@ CANONICAL_UNIT = {
 LOG_CAP_BYTES = 4 * 1024 * 1024
 LOG_EXCERPT_BYTES = 64 * 1024
 RAW_CAP_BYTES = 16 * 1024 * 1024
+# One bundle holds every raw record of a configuration (each record is still capped and never truncated).
+BUNDLE_CAP_BYTES = 256 * 1024 * 1024
 TRUNCATION_MARKER = b"\n...[truncated by aisim-e2e size cap; full SHA-256 in manifest]...\n"
 
 Authority = Literal["observed", "producer_declared", "source_verified_default", "unknown"]
@@ -179,7 +193,7 @@ class ProvenanceInfo(_Record):
 
     artifact_id: str = Field(min_length=1)
     observation_id: str | None = None
-    kind: Literal["raw-output", "log"]
+    kind: Literal["raw-output", "raw-output-bundle", "log"]
     tier: Literal[3] = 3
     compression: Literal["gzip"] = "gzip"
     redacted: bool
@@ -205,6 +219,10 @@ class E2eManifestBody(_Record):
     parallelism: dict[str, dict[str, int]]
     parallelism_complete: bool
     precision: dict[str, str]
+    # Deployment facts mirrored into the envelope Identity (identity hash v3). None means not reported.
+    dp_attention: dict[str, bool] | None = None  # per worker role; a boolean, never a degree
+    multinode: bool | None = None
+    offload_mode: str | None = None
     # Identity-relevant open settings (versioned identity rule); changes the config ID.
     identity_settings: dict[str, JsonValue] = Field(default_factory=dict)
     # Open effective settings; a new runtime option is a new key, never a schema change.
@@ -233,6 +251,9 @@ class E2eManifestBody(_Record):
             parallelism_complete=self.parallelism_complete,
             precision=self.precision,
             deployment=self.deployment,
+            dp_attention=self.dp_attention,
+            multinode=self.multinode,
+            offload_mode=self.offload_mode,
         )
 
     def configuration_id(self) -> str:
@@ -283,8 +304,20 @@ class ObservationRow(_Record):
     requests_failed: int | None = Field(default=None, ge=0)
     device_count: int | None = Field(default=None, ge=0)
     raw_artifact_id: str | None = None
+    # Member of a raw-output bundle: byte range of this observation's record inside the uncompressed
+    # bundle. Both null when the artifact holds exactly this observation's record. ``record_sha256`` is
+    # always the hash of that record, so every row can be audited on its own.
+    raw_offset: int | None = Field(default=None, ge=0)
+    raw_length: int | None = Field(default=None, ge=0)
     log_artifact_id: str | None = None
     evidence_refs: list[str] = Field(default_factory=list)
+    # Source fields without a canonical home, verbatim (canonical JSON text), so a source-agnostic reader
+    # does not need the raw artifact: the producer's recipe hash, the upstream configuration record this
+    # observation belongs to, and the source metrics that have no metric row (power, qps, cache hit rates,
+    # parallelism degrees, ...). Typed columns and identity fields stay authoritative where they overlap.
+    recipe_fingerprint: str | None = None
+    source_config_json: str | None = None
+    unmapped_metrics_json: str | None = None
 
 
 class MetricRow(_Record):
@@ -488,7 +521,7 @@ def redact(data: bytes) -> bytes:
 class ProvenanceFile:
     """Original bytes of a tool output or log, to be stored compressed and hash-linked."""
 
-    kind: Literal["raw-output", "log"]
+    kind: Literal["raw-output", "raw-output-bundle", "log"]
     data: bytes
     observation_id: str | None = None
     name: str | None = None
@@ -507,11 +540,13 @@ def store_provenance(root: Path, directory: str, item: ProvenanceFile) -> tuple[
     Raw tool output is stored unchanged or rejected past its cap; a log past its
     cap keeps a head/tail excerpt plus the full-content hash and size.
     """
-    cap = item.cap_bytes or (RAW_CAP_BYTES if item.kind == "raw-output" else LOG_CAP_BYTES)
+    cap = item.cap_bytes or {"raw-output": RAW_CAP_BYTES, "raw-output-bundle": BUNDLE_CAP_BYTES}.get(
+        item.kind, LOG_CAP_BYTES
+    )
     full = item.data
     kept, truncated = full, False
     if len(full) > cap:
-        if item.kind == "raw-output":
+        if item.kind != "log":
             raise ValueError(f"raw tool output is {len(full)} bytes, over the {cap} byte cap; it is never truncated")
         kept = full[:LOG_EXCERPT_BYTES] + TRUNCATION_MARKER + full[-LOG_EXCERPT_BYTES:]
         truncated = True
@@ -550,6 +585,71 @@ def store_provenance(root: Path, directory: str, item: ProvenanceFile) -> tuple[
 def read_provenance(root: Path, artifact: Artifact) -> bytes:
     """Verified, decompressed content of a provenance artifact (the excerpt when truncated)."""
     return gzip.decompress(_verify(Path(root), artifact).read_bytes())
+
+
+def bundle_raw_records(records: Sequence[tuple[str, bytes]]) -> tuple[bytes, dict[str, tuple[int, int]]]:
+    """Concatenate raw records (one per line) into one bundle.
+
+    Returns the uncompressed bundle bytes and ``observation_id -> (offset, length)`` of each record
+    (the newline separator is not part of the record). Every record is capped like a single raw
+    artifact and never truncated.
+    """
+    out, ranges = bytearray(), {}
+    for observation_id, data in records:
+        if observation_id in ranges:
+            raise ValueError(f"duplicate raw record: {observation_id}")
+        if len(data) > RAW_CAP_BYTES:
+            raise ValueError(
+                f"raw tool output of {observation_id} is {len(data)} bytes, over the {RAW_CAP_BYTES} byte cap; "
+                "it is never truncated"
+            )
+        ranges[observation_id] = (len(out), len(data))
+        out += data + b"\n"
+    return bytes(out), ranges
+
+
+def read_raw_records(root: Path, manifest: Manifest, observations: Iterable[ObservationRow]) -> dict[str, bytes]:
+    """Verified raw record bytes by observation ID, decompressing each artifact once.
+
+    Each record is checked against the observation's ``record_sha256`` (and the artifact against its
+    manifest hash), so a bundled and a one-file-per-observation dataset read identically.
+    """
+    artifacts = {a.artifact_id: a for a in manifest.artifacts}
+    infos = {p.artifact_id: p for p in body_from_manifest(manifest).provenance_artifacts}
+    cache: dict[str, bytes] = {}
+    out = {}
+    for obs in observations:
+        ref = obs.raw_artifact_id
+        if ref is None:
+            raise LoaderError(f"observation {obs.observation_id} has no raw artifact")
+        artifact, info = artifacts.get(ref), infos.get(ref)
+        if artifact is None or info is None:
+            raise LoaderError(f"observation {obs.observation_id} references unknown artifact {ref}")
+        if info.truncated:
+            raise LoaderError(f"raw artifact {ref} is truncated")
+        if ref not in cache:
+            cache[ref] = read_provenance(root, artifact)
+        data = cache[ref]
+        if (obs.raw_offset is None) != (obs.raw_length is None):
+            raise LoaderError(f"observation {obs.observation_id} has a partial raw record range")
+        if obs.raw_offset is not None:
+            if info.kind != "raw-output-bundle" or obs.raw_offset + obs.raw_length > len(data):
+                raise LoaderError(f"observation {obs.observation_id} has an invalid raw record range")
+            data = data[obs.raw_offset : obs.raw_offset + obs.raw_length]
+        elif info.kind == "raw-output-bundle":
+            raise LoaderError(f"observation {obs.observation_id} needs a record range in a bundle")
+        if _sha(data) != obs.record_sha256:
+            raise LoaderError(f"raw record hash mismatch: {obs.observation_id}")
+        out[obs.observation_id] = data
+    return out
+
+
+def read_raw_record(root: Path, dataset: E2eDataset, observation_id: str) -> bytes:
+    """Verified raw record of one observation of a loaded configuration."""
+    obs = next((o for o in dataset.observations if o.observation_id == observation_id), None)
+    if obs is None:
+        raise LoaderError(f"unknown observation: {observation_id}")
+    return read_raw_records(Path(root), dataset.manifest, [obs])[observation_id]
 
 
 # --------------------------------------------------------------------------- configuration write/read
@@ -998,17 +1098,13 @@ def _ifx_body(
             {
                 "field": "parallelism",
                 "reason": "pp, cp and dcp come from the record's metrics keys when present; dp degrees are not "
-                "reported; dp_attention kept verbatim",
+                "reported; dp_attention is the source boolean, not a degree",
             },
         ]
     )
-    settings = {
-        "spec_method": Setting(value=config["spec_method"], authority="producer_declared"),
-        "is_multinode": Setting(value=config["is_multinode"], authority="producer_declared"),
-    }
-    for key in ("offload_mode", "workers"):
-        if key in config:
-            settings[key] = Setting(value=config[key], authority="producer_declared")
+    settings = {"spec_method": Setting(value=config["spec_method"], authority="producer_declared")}
+    if "workers" in config:
+        settings["workers"] = Setting(value=config["workers"], authority="producer_declared")
     return E2eManifestBody(
         model_id=config["model"],
         deployment="disaggregated" if disagg else "aggregated",
@@ -1018,24 +1114,21 @@ def _ifx_body(
         parallelism=parallelism,
         parallelism_complete=False,
         precision={"weights": config["precision"]},
-        # Identity rule "inferencex-identity/1": every source field that distinguishes upstream
-        # deployments (booleans stay booleans, never degrees) so distinct source configurations
-        # never share a configuration ID. Run telemetry (``workers`` GPU stats) is not identity.
+        # Every source field that distinguishes upstream deployments is identity, so distinct source
+        # configurations never share a configuration ID: attention DP (a boolean, never a degree),
+        # multinode and KV offload are first-class identity fields (hash v3); the speculation method
+        # and worker counts are identity settings. Run telemetry (``workers`` GPU stats) is not identity.
+        dp_attention={role: config[f"{role}_dp_attention"] for role in ("prefill", "decode")},
+        multinode=config["is_multinode"],
+        offload_mode=config.get("offload_mode"),
         identity_settings={
             "spec_method": config["spec_method"],
-            "is_multinode": config["is_multinode"],
-            "dp_attention": {role: config[f"{role}_dp_attention"] for role in ("prefill", "decode")},
-            "offload_mode": config.get("offload_mode"),
             "workers": {k: v.model_dump(exclude_none=True) for k, v in sorted(workers.items())},
         },
         settings=settings,
         workers=workers,
         source_kind="inferencex",
         source_config_id=str(config.get("config_id")) if config.get("config_id") is not None else None,
-        source_fields={
-            "prefill_dp_attention": config["prefill_dp_attention"],
-            "decode_dp_attention": config["decode_dp_attention"],
-        },
         evidence_gaps=gaps,
     )
 
@@ -1045,8 +1138,11 @@ def inferencex_to_configurations(
 ) -> list[E2eConfigurationData]:
     """Convert InferenceX benchmark records (the cache's raw record shape) to E2E configurations.
 
-    Each raw record is kept unchanged (canonical JSON) as a hash-linked raw-output
-    artifact, so a mapping error is fixed by re-normalizing. ``runs`` optionally
+    Each raw record is kept unchanged (canonical JSON) in one hash-linked
+    raw-output bundle per configuration (every observation keeps the hash and byte
+    range of its own record), so a mapping error is fixed by re-normalizing. Source
+    fields without a canonical home (recipe fingerprint, upstream configuration
+    record, unmapped metrics) are also typed observation columns. ``runs`` optionally
     maps a ``run_url`` to producer metadata (``head_sha``, ``run_attempt``,
     ``run_started_at``, ``head_branch``, ...); it is kept verbatim under
     ``source_fields["producer_runs"]`` because ordering and freshness decisions need it.
@@ -1058,10 +1154,9 @@ def inferencex_to_configurations(
     runs = runs or {}
     grouped: dict[str, list[Mapping[str, Any]]] = {}
     for raw in records:
-        config = {key: raw[key] for key in INFERENCEX_CONFIG_FIELDS}
-        config.update({key: raw[key] for key in ("offload_mode", "workers") if key in raw})
-        grouped.setdefault(_sha(_canonical(config)), []).append(raw)
+        grouped.setdefault(_sha(_canonical(_source_config(raw))), []).append(raw)
     merged: dict[str, E2eConfigurationData] = {}
+    raw_members: dict[str, list[tuple[str, bytes]]] = {}
     subgroups: list[tuple[str, str, dict, list[Mapping[str, Any]]]] = []
     for source_config, group in sorted(grouped.items()):
         by_dims: dict[str, tuple[dict, list[Mapping[str, Any]]]] = {}
@@ -1073,22 +1168,24 @@ def inferencex_to_configurations(
         first = group[0]
         body = _ifx_body({**first, "config_id": "hf:" + source_config}, [], dims)
         cid = body.configuration_id()
-        observations, metrics, provenance = [], [], []
+        observations, metrics = [], []
+        members = raw_members.setdefault(cid, [])
         unmapped_keys: set[str] = set()
         producer_runs: dict[str, Any] = {}
         gpus = (first.get("num_prefill_gpu") or 0) + (first.get("num_decode_gpu") or 0)
+        source_config_json = _canonical(_source_config(first)).decode()
         for raw in sorted(group, key=lambda r: int(r["id"])):
             canonical = _canonical(raw)
             oid = f"inferencex:{raw['id']}"
             rows, unmapped = inferencex_metrics(oid, raw.get("metrics") or {}, gpus or None)
             metrics.extend(rows)
             unmapped_keys.update(unmapped)
+            mapped = {m.source_name for m in rows}
+            extras = {k: v for k, v in (raw.get("metrics") or {}).items() if k not in mapped}
             run = runs.get(raw.get("run_url") or "", {})
             if run:
                 producer_runs[raw["run_url"]] = dict(run)
-            raw_item = ProvenanceFile(
-                "raw-output", canonical, oid, name=f"inferencex-{raw['id']}", source_tool="inferencex"
-            )
+            members.append((oid, canonical))
             observations.append(
                 ObservationRow(
                     observation_id=oid,
@@ -1110,11 +1207,11 @@ def inferencex_to_configurations(
                     concurrency=raw.get("conc"),
                     outcome="complete",
                     device_count=gpus or None,
-                    raw_artifact_id=f"raw-output:{raw_item.name}",
-                    evidence_refs=[f"raw-output:{raw_item.name}"],
+                    recipe_fingerprint=raw.get("recipe_fingerprint"),
+                    source_config_json=source_config_json,
+                    unmapped_metrics_json=_canonical(extras).decode() if extras else None,
                 )
             )
-            provenance.append(raw_item)
         existing = merged.get(cid)
         if existing is None:
             body.source_config_id = "hf:" + source_config
@@ -1122,7 +1219,7 @@ def inferencex_to_configurations(
                 body.source_fields["unmapped_metrics"] = sorted(unmapped_keys)
             if producer_runs:
                 body.source_fields["producer_runs"] = producer_runs  # type: ignore[assignment]
-            merged[cid] = E2eConfigurationData(body, observations, metrics, [], provenance)
+            merged[cid] = E2eConfigurationData(body, observations, metrics, [], [])
             continue
         target = existing.body
         ids = set(target.source_fields.get("source_config_ids", [target.source_config_id]))  # type: ignore[arg-type]
@@ -1136,8 +1233,28 @@ def inferencex_to_configurations(
             target.source_fields.setdefault("producer_runs", {}).update(producer_runs)  # type: ignore[union-attr]
         existing.observations.extend(observations)
         existing.metrics.extend(metrics)
-        existing.provenance.extend(provenance)
+    for cid, data in merged.items():
+        # One bundle of raw records per configuration, in observation order; every observation keeps the
+        # hash and byte range of its own record.
+        data.observations.sort(key=lambda o: int(o.source_observation_id))
+        order = {o.observation_id: i for i, o in enumerate(data.observations)}
+        data.metrics.sort(key=lambda m: order[m.observation_id])  # stable: keeps each observation's row order
+        bundle, ranges = bundle_raw_records(sorted(raw_members[cid], key=lambda m: order[m[0]]))
+        item = ProvenanceFile("raw-output-bundle", bundle, name=f"inferencex-raw-{cid[4:16]}", source_tool="inferencex")
+        data.provenance.append(item)
+        ref = f"raw-output-bundle:{item.name}"
+        for obs in data.observations:
+            obs.raw_artifact_id = ref
+            obs.raw_offset, obs.raw_length = ranges[obs.observation_id]
+            obs.evidence_refs = [ref]
     return [merged[cid] for cid in sorted(merged)]
+
+
+def _source_config(raw: Mapping[str, Any]) -> dict[str, Any]:
+    """The upstream configuration record of an InferenceX row (its content hash is the source config ID)."""
+    config = {key: raw[key] for key in INFERENCEX_CONFIG_FIELDS}
+    config.update({key: raw[key] for key in ("offload_mode", "workers") if key in raw})
+    return config
 
 
 # --------------------------------------------------------------------------- developer (AIPerf) converter

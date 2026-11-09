@@ -12,7 +12,7 @@ converts it with the shared :func:`~aisimulate_core.data.e2e.inferencex_to_confi
 converter into a local ``aisim-e2e/v1`` dataset:
 
 ``data/e2e/<model>/<hardware>/<framework>/<version>/<parallelism>/<cfg-id>/``
-    manifest, observations, metrics and one raw-output artifact per observation
+    manifest, observations, metrics and one raw-output bundle (every raw record, hash-checked per row)
 ``catalog/e2e.json``, ``catalog/dataset.json``
     category and dataset indexes
 ``catalog/e2e/snapshots/<snapshot-id>/``

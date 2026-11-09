@@ -321,11 +321,13 @@ def _unified_records(manifest, cache, transport):
     records, members = [], []
     for entry in entries:
         data = e2e.load_e2e(result.root, entry.manifest.path)
-        artifacts = {a.artifact_id: a for a in data.manifest.artifacts}
         for obs in data.observations:
             if obs.source_kind != "inferencex" or obs.raw_artifact_id is None:
                 raise ValueError("HF e2e observation is not a raw InferenceX record")
-            raw = json.loads(e2e.read_provenance(result.root, artifacts[obs.raw_artifact_id]))
+        # Raw records come from the per-configuration bundle (each one hash-checked against its row).
+        raw_records = e2e.read_raw_records(result.root, data.manifest, data.observations)
+        for obs in data.observations:
+            raw = json.loads(raw_records[obs.observation_id])
             if hashlib.sha256(
                 canonical(raw)
             ).hexdigest() != obs.record_sha256 or obs.observation_id != "inferencex:" + str(raw["id"]):

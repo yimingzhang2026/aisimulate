@@ -13,7 +13,6 @@ accuracy scripts and are compared by ``scripts/e2e_accuracy/migrate_infx_parity.
 
 from __future__ import annotations
 
-import gzip
 import re
 from collections import Counter, defaultdict
 from collections.abc import Mapping
@@ -25,7 +24,7 @@ from aisimulate_core.data.e2e import (
     INFERENCEX_CONFIG_FIELDS,
     E2eDataset,
     load_e2e,
-    read_provenance,
+    read_raw_records,
     read_snapshot,
 )
 from aisimulate_core.data.migrate_infx import PRODUCER_URL, SNAPSHOT_DIR, InfxCache, _sha, canonical
@@ -58,7 +57,8 @@ EXPLAINED: dict[str, str] = {
     ),
     "metric.source_key_unmapped": (
         "The source metric has no aisim-e2e/v1 mapping yet (power, qps, token counts, cache hit rates, ...); "
-        "it stays in the hash-linked raw-output artifact. The cache had no row for it either."
+        "it stays in the observation's typed unmapped_metrics_json column and the hash-linked raw-output "
+        "bundle. The cache had no row for it either."
     ),
     "identity.configuration_merge_telemetry": (
         "Source configurations that differ only in the GPU-telemetry list `workers` share one configuration_id; "
@@ -278,6 +278,7 @@ def compare_cache_to_dataset(cache: InfxCache, root: Path | str) -> dict[str, An
     }
 
     # ---- provenance ---------------------------------------------------------------------------
+    raw_cache: dict[str, bytes] = {}  # observation_id -> verified raw record, filled one configuration at a time
     for oid in sorted(set(old_obs) & set(new_obs)):
         old, new, raw = old_obs[oid], new_obs[oid], raw_of[oid]
         pairs = {
@@ -292,20 +293,29 @@ def compare_cache_to_dataset(cache: InfxCache, root: Path | str) -> dict[str, An
         for name, (a, b) in pairs.items():
             if a != b:
                 provenance.add(f"{name}_mismatch", (oid, a, b))
+        mapped = {m.source_name for m in new_metrics[oid]}
+        extras = {k: v for k, v in raw["metrics"].items() if k not in mapped}
+        config = {k: raw[k] for k in INFERENCEX_CONFIG_FIELDS}
+        config.update({k: raw[k] for k in ("offload_mode", "workers") if k in raw})
+        if new.recipe_fingerprint != raw.get("recipe_fingerprint"):
+            provenance.add("recipe_fingerprint_mismatch", oid)
+        if new.source_config_json != canonical(config).decode():
+            provenance.add("source_config_json_mismatch", oid)
+        if (new.unmapped_metrics_json or "{}") != canonical(extras).decode():
+            provenance.add("unmapped_metrics_json_mismatch", oid)
         ds = body_of[oid]
-        artifact_id = new.raw_artifact_id
-        artifact = next((a for a in ds.manifest.artifacts if a.artifact_id == artifact_id), None)
-        if artifact is None:
+        info = next((p for p in ds.body.provenance_artifacts if p.artifact_id == new.raw_artifact_id), None)
+        if info is None:
             provenance.add("raw_artifact_missing", oid)
             continue
-        stored = gzip.decompress((root / artifact.path).read_bytes())
-        if stored != canonical(raw):
-            provenance.add("raw_artifact_differs_from_record", oid)
-        info = next(p for p in ds.body.provenance_artifacts if p.artifact_id == artifact_id)
-        if info.full_sha256 != old["record_sha256"] or info.truncated:
+        if info.truncated:
             provenance.add("raw_artifact_hash_or_truncation", oid)
-        if read_provenance(root, artifact) != canonical(raw):
-            provenance.add("raw_artifact_read_mismatch", oid)
+        if new.record_sha256 != old["record_sha256"]:
+            provenance.add("raw_artifact_hash_or_truncation", oid)
+        if oid not in raw_cache:
+            raw_cache.update(read_raw_records(root, ds.manifest, ds.observations))
+        if raw_cache[oid] != canonical(raw):
+            provenance.add("raw_artifact_differs_from_record", oid)
         url = raw.get("run_url")
         runs = ds.body.source_fields.get("producer_runs", {})
         if url and PRODUCER_URL.fullmatch(url) and url not in runs:

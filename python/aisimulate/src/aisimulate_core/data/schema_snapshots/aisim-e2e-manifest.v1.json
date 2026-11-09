@@ -34,6 +34,7 @@
         "kind": {
           "enum": [
             "raw-output",
+            "raw-output-bundle",
             "log"
           ],
           "title": "Kind",
@@ -193,6 +194,21 @@
       "title": "Deployment",
       "type": "string"
     },
+    "dp_attention": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Dp Attention"
+    },
     "evidence_gaps": {
       "items": {
         "additionalProperties": {
@@ -241,6 +257,30 @@
       ],
       "default": null,
       "title": "Model Revision"
+    },
+    "multinode": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Multinode"
+    },
+    "offload_mode": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Offload Mode"
     },
     "parallelism": {
       "additionalProperties": {

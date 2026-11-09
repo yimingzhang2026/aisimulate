@@ -4,6 +4,7 @@
 """aisim-e2e/v1: InferenceX and developer fixtures share one evaluator loader."""
 
 import gzip
+import json
 
 import pyarrow.parquet as pq
 import pytest
@@ -24,6 +25,7 @@ from aisimulate_core.data.e2e import (
     make_metric,
     public_release_problems,
     read_provenance,
+    read_raw_record,
     read_snapshot,
     redact,
     store_provenance,
@@ -222,9 +224,10 @@ def test_inferencex_metrics_every_statistic_zero_vs_missing(tmp_path):
     assert by_key[("interactivity", "mean")].normalization == "per_user"
     # Unmapped metrics are not invented; they stay in the raw artifact and are noted verbatim.
     assert ds.body.source_fields["unmapped_metrics"] == ["weird_metric"]
-    raw = read_provenance(tmp_path, next(a for a in ds.manifest.artifacts if a.role == "raw-output"))
+    raw = read_raw_record(tmp_path, ds, ds.observations[0].observation_id)
     assert b"weird_metric" in raw
-    assert ds.body.source_fields["decode_dp_attention"] is False  # booleans never become degrees
+    assert json.loads(ds.observations[0].unmapped_metrics_json) == {"weird_metric": 7}  # typed, verbatim
+    assert ds.body.dp_attention == {"decode": False, "prefill": False}  # booleans never become degrees
 
 
 def test_inferencex_disaggregated_groups_and_identity():

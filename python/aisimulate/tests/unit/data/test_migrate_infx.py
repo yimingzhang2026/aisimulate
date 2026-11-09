@@ -289,6 +289,78 @@ def test_identity_keeps_dp_attention_and_pp_dcp_but_not_telemetry(migrated):
     assert len({cids["inferencex:1"], cids["inferencex:3"], cids["inferencex:5"], cids["inferencex:6"]}) == 4
 
 
+def test_deployment_facts_are_first_class_identity_fields(migrated):
+    _, result = migrated
+    from aisimulate_core.data.migrate_infx_parity import load_dataset
+
+    datasets, _ = load_dataset(result.output)
+    for ds in datasets:
+        identity = ds.manifest.identity
+        assert (identity.dp_attention, identity.multinode, identity.offload_mode) == (
+            ds.body.dp_attention,
+            ds.body.multinode,
+            ds.body.offload_mode,
+        )
+        assert identity.multinode is False and identity.offload_mode == "off"
+        assert set(ds.body.identity_settings) == {"spec_method", "workers"}
+        assert ds.manifest.configuration_id.startswith("cfg-")
+    assert {tuple(sorted(d.body.dp_attention.items())) for d in datasets} == {
+        (("decode", False), ("prefill", False)),
+        (("decode", True), ("prefill", False)),
+    }
+
+
+def test_raw_records_are_bundled_per_configuration_with_row_level_audit(migrated):
+    from aisimulate_core.data.e2e import read_raw_records
+    from aisimulate_core.data.migrate_infx_parity import load_dataset
+
+    cache, result = migrated
+    datasets, _ = load_dataset(result.output)
+    raw_of = {"inferencex:" + r["id"]: r for r in cache.records}
+    for ds in datasets:
+        bundles = [a for a in ds.manifest.artifacts if a.role == "raw-output-bundle"]
+        assert len(bundles) == 1  # one raw artifact file per configuration, not per observation
+        assert not [a for a in ds.manifest.artifacts if a.role == "raw-output"]
+        records = read_raw_records(result.output, ds.manifest, ds.observations)
+        for obs in ds.observations:
+            assert obs.raw_artifact_id == bundles[0].artifact_id
+            assert records[obs.observation_id] == canonical(raw_of[obs.observation_id])
+            assert hashlib.sha256(records[obs.observation_id]).hexdigest() == obs.record_sha256
+    assert result.files < 3 * len(raw_of) + 10 * len(datasets)
+
+
+def test_bundle_row_audit_detects_a_changed_row_range(migrated):
+    from aisimulate_core.data.e2e import read_raw_records
+    from aisimulate_core.data.loaders import LoaderError
+    from aisimulate_core.data.migrate_infx_parity import load_dataset
+
+    _, result = migrated
+    datasets, _ = load_dataset(result.output)
+    ds = next(d for d in datasets if len(d.observations) > 1)
+    first, second = ds.observations[:2]
+    swapped = [first.model_copy(update={"raw_offset": second.raw_offset, "raw_length": second.raw_length})]
+    with pytest.raises(LoaderError, match="hash mismatch"):
+        read_raw_records(result.output, ds.manifest, swapped)
+    outside = [first.model_copy(update={"raw_offset": 10**9})]
+    with pytest.raises(LoaderError, match="invalid raw record range"):
+        read_raw_records(result.output, ds.manifest, outside)
+
+
+def test_typed_columns_carry_fields_without_a_canonical_home(migrated):
+    cache, result = migrated
+    from aisimulate_core.data.migrate_infx_parity import load_dataset
+
+    datasets, _ = load_dataset(result.output)
+    obs = {o.observation_id: o for ds in datasets for o in ds.observations}
+    five = obs["inferencex:5"]
+    # pp / dcp / power are verbatim source metrics without a metric row.
+    assert json.loads(five.unmapped_metrics_json) == {"avg_power_w": 500.0, "dcp_size": 4, "pp": 2}
+    assert json.loads(obs["inferencex:4"].source_config_json)["workers"] == [{"avg_power_w": 1.0, "role": "decode"}]
+    assert json.loads(obs["inferencex:1"].source_config_json)["workers"] is None
+    zero = json.loads(obs["inferencex:6"].source_config_json)
+    assert (zero["decode_tp"], zero["decode_ep"]) == (0, 0)  # the source value survives the "unknown" identity
+
+
 def test_zero_degree_is_unknown_not_a_degree():
     [data] = inferencex_to_configurations([_records()[5]])
     assert data.body.parallelism == {"decode": {}, "prefill": {"tp": 8}}

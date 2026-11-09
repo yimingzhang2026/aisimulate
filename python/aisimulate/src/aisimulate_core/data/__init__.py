@@ -26,11 +26,15 @@ Purpose = Literal[
     "system-spec",
 ]
 # Version 1 hashed only the original Identity fields. Version 2 adds the
-# first-class deployment fields below. A version is chosen from the identity
-# (see configuration_id) so existing IDs never change and a v2-only field can
-# never be silently dropped from a hash.
-IDENTITY_HASH_VERSIONS = (1, 2)
+# first-class deployment fields below. Version 3 adds the deployment facts that
+# distinguish otherwise identical E2E configurations (attention data parallelism,
+# multinode topology, KV offload mode). A version is chosen from the identity
+# (see configuration_id) so existing IDs never change and a field of a later
+# version can never be silently dropped from a hash.
+IDENTITY_HASH_VERSIONS = (1, 2, 3)
 _V2_FIELDS = ("parallelism", "parallelism_complete", "precision", "deployment")
+_V3_FIELDS = ("dp_attention", "multinode", "offload_mode")
+_FIELDS_ADDED_AFTER = {1: _V2_FIELDS + _V3_FIELDS, 2: _V3_FIELDS, 3: ()}
 _DIMENSION = re.compile(r"^(x-)?[a-z][a-z0-9_]*$")
 
 
@@ -81,6 +85,22 @@ class Identity(_Record):
     parallelism_complete: bool | None = None
     precision: dict[str, str] | None = None  # e.g. {"weights": "fp8", "kv_cache": "fp8"}
     deployment: Literal["aggregated", "disaggregated"] | None = None
+    # Identity hash v3 fields. None means not reported, never a default.
+    # ``dp_attention`` is the source's per-role boolean (never a degree; degrees
+    # live in ``parallelism``), ``multinode`` is the source's multinode flag and
+    # ``offload_mode`` its KV offload setting (e.g. "off", "on").
+    dp_attention: dict[str, bool] | None = None
+    multinode: bool | None = None
+    offload_mode: str | None = None
+
+    @field_validator("dp_attention")
+    @classmethod
+    def normalize_dp_attention(cls, value):
+        if value is None:
+            return None
+        if any(not role for role in value):
+            raise ValueError("worker role must be non-empty")
+        return dict(sorted(value.items()))
 
     @field_validator("parallelism")
     @classmethod
@@ -104,6 +124,9 @@ class Identity(_Record):
 
     def uses_v2_fields(self) -> bool:
         return any(getattr(self, f) is not None for f in _V2_FIELDS)
+
+    def uses_v3_fields(self) -> bool:
+        return any(getattr(self, f) is not None for f in _V3_FIELDS)
 
 
 class Manifest(_Record):
@@ -148,16 +171,20 @@ class DatasetIndex(_Record):
 def configuration_id(category: str, purpose: str, identity: Identity, version: int | None = None) -> str:
     """Hash effective identity, including explicit nulls and unresolved source facts.
 
-    version=None picks 1 when no v2 field is set (keeping every existing ID
-    stable) and 2 otherwise. Version 1 cannot hash an identity with v2 fields.
+    version=None picks the lowest version that can represent every set field: 1
+    when no v2 or v3 field is set (keeping every existing ID stable), 2 when only
+    v2 fields are set, 3 otherwise. An older version cannot hash an identity that
+    sets a later field.
     """
     if version is None:
-        version = 2 if identity.uses_v2_fields() else 1
+        version = 3 if identity.uses_v3_fields() else 2 if identity.uses_v2_fields() else 1
     if version not in IDENTITY_HASH_VERSIONS:
         raise ValueError(f"unsupported identity hash version: {version}")
-    exclude = set(_V2_FIELDS) if version == 1 else set()
+    exclude = set(_FIELDS_ADDED_AFTER[version])
     if version == 1 and identity.uses_v2_fields():
         raise ValueError("identity hash v1 cannot represent parallelism, precision or deployment")
+    if version < 3 and identity.uses_v3_fields():
+        raise ValueError(f"identity hash v{version} cannot represent dp_attention, multinode or offload_mode")
     payload = {
         "version": version,
         "category": category,

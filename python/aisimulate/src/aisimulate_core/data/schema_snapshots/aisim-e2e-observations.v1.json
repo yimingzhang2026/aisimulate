@@ -263,6 +263,44 @@
       "default": null,
       "title": "Raw Artifact Id"
     },
+    "raw_length": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Raw Length"
+    },
+    "raw_offset": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Raw Offset"
+    },
+    "recipe_fingerprint": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Recipe Fingerprint"
+    },
     "record_sha256": {
       "pattern": "^[0-9a-f]{64}$",
       "title": "Record Sha256",
@@ -331,6 +369,18 @@
       "default": null,
       "title": "Source Config Id"
     },
+    "source_config_json": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Config Json"
+    },
     "source_kind": {
       "title": "Source Kind",
       "type": "string"
@@ -346,6 +396,18 @@
       ],
       "default": null,
       "title": "Source Observation Id"
+    },
+    "unmapped_metrics_json": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Unmapped Metrics Json"
     }
   },
   "required": [

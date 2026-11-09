@@ -546,7 +546,45 @@ def test_identity_hash_v2_covers_new_fields():
     ):
         assert configuration_id("op-latency", "execution-profile", _identity(**field)) not in {base, v2}
     with pytest.raises(ValueError, match="unsupported"):
-        configuration_id("op-latency", "execution-profile", _identity(), version=3)
+        configuration_id("op-latency", "execution-profile", _identity(), version=4)
+
+
+def test_identity_hash_v3_covers_deployment_facts_and_keeps_older_ids():
+    plain = _identity()
+    par = _identity(parallelism={"aggregated": {"tp": 4}})
+    # Older identities never see the new fields: their IDs are unchanged by adding them to the model.
+    assert configuration_id("e2e", "e2e-configuration", plain) == configuration_id(
+        "e2e", "e2e-configuration", plain, version=1
+    )
+    assert configuration_id("e2e", "e2e-configuration", par) == configuration_id(
+        "e2e", "e2e-configuration", par, version=2
+    )
+    seen = {configuration_id("e2e", "e2e-configuration", par)}
+    for field in (
+        {"dp_attention": {"decode": True, "prefill": False}},
+        {"dp_attention": {"decode": False, "prefill": False}},
+        {"multinode": False},
+        {"multinode": True},
+        {"offload_mode": "off"},
+        {"offload_mode": "on"},
+    ):
+        identity = _identity(parallelism={"aggregated": {"tp": 4}}, **field)
+        assert identity.uses_v3_fields()
+        cid = configuration_id("e2e", "e2e-configuration", identity)
+        assert cid == configuration_id("e2e", "e2e-configuration", identity, version=3)
+        assert cid not in seen  # each value is part of the hash
+        seen.add(cid)
+        for old in (1, 2):
+            with pytest.raises(ValueError, match="cannot represent"):
+                configuration_id("e2e", "e2e-configuration", identity, version=old)
+    # dp_attention key order does not matter; a degree is not a boolean.
+    a = _identity(dp_attention={"prefill": False, "decode": True})
+    b = _identity(dp_attention={"decode": True, "prefill": False})
+    assert configuration_id("e2e", "e2e-configuration", a) == configuration_id("e2e", "e2e-configuration", b)
+    with pytest.raises(ValueError):
+        _identity(dp_attention={"decode": 2})
+    with pytest.raises(ValueError):
+        _identity(dp_attention={"": True})
 
 
 def test_parallelism_normalization_keeps_ids_stable():

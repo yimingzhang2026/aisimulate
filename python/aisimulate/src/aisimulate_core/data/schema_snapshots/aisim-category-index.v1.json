@@ -129,6 +129,21 @@
           "default": null,
           "title": "Deployment"
         },
+        "dp_attention": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "boolean"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dp Attention"
+        },
         "effective_settings": {
           "additionalProperties": {
             "$ref": "#/$defs/JsonValue"
@@ -158,6 +173,30 @@
             }
           ],
           "title": "Model"
+        },
+        "multinode": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Multinode"
+        },
+        "offload_mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Offload Mode"
         },
         "operation_family": {
           "anyOf": [

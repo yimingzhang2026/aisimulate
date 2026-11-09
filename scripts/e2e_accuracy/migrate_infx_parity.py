@@ -11,9 +11,11 @@ rebuilds the same ``tables`` from the migrated dataset and runs the *same* selec
 Two views of the migrated dataset are compared with the current path:
 
 * **typed**: only manifest, observation and metric tables (what a source-agnostic evaluator
-  reads). Fields with no typed home surface as explicit differences.
-* **raw-backed**: typed tables plus the hash-linked raw-output artifact for fields that have
-  no typed home yet (``workers`` telemetry, unmapped metrics, ``recipe_fingerprint``).
+  reads), including the observation columns that carry source fields without a canonical home
+  (``recipe_fingerprint``, ``source_config_json``, ``unmapped_metrics_json``). Any field the
+  typed tables cannot supply surfaces as an explicit difference.
+* **raw-backed**: the same tables rebuilt from the hash-linked raw-output bundle; the reference
+  that shows the typed columns lose nothing.
 
 Reads local files only. ``--check-live`` re-reads the pinned HF revision (read-only) and
 confirms the local cache copy equals what the current path downloads.
@@ -77,17 +79,15 @@ def to_tables(records: list[dict], runs: dict[str, dict]) -> dict[str, list]:
 # --------------------------------------------------------------------------- new-path tables
 
 
-def _role(parallelism: dict, role: str, dim: str) -> int:
-    return parallelism.get(role, {}).get(dim, 1)  # degree 1 is normalized away
-
-
 def tables_from_dataset(root: Path, *, raw_backed: bool) -> dict[str, list]:
     """The ``tables`` the selection code consumes, rebuilt from an ``aisim-e2e/v1`` dataset.
 
-    Typed (``raw_backed=False``): only manifest, observation and metric rows. Raw-backed: fields
-    that have no typed home are read from the observation's raw-output artifact.
+    Typed (``raw_backed=False``): only manifest, observation and metric rows (a source-agnostic
+    evaluator's view): the metric rows plus the observation's typed ``unmapped_metrics_json``,
+    ``source_config_json`` and ``recipe_fingerprint`` columns. Raw-backed: the same tables rebuilt from
+    each observation's hash-checked raw record in the per-configuration bundle.
     """
-    from aisimulate_core.data.e2e import read_provenance
+    from aisimulate_core.data.e2e import read_raw_records
 
     datasets, _ = load_dataset(root)
     configs: dict[str, dict] = {}
@@ -95,60 +95,30 @@ def tables_from_dataset(root: Path, *, raw_backed: bool) -> dict[str, list]:
     benches = []
     for ds in datasets:
         body = ds.body
-        disagg = body.deployment == "disaggregated"
-        par = body.parallelism
-        ident = body.identity_settings
         metrics_by_obs: dict[str, dict[str, float]] = defaultdict(dict)
         for row in ds.metrics:
             if row.status == "valid" and row.source_name is not None and row.scope == "run":
                 metrics_by_obs[row.observation_id][row.source_name] = row.source_value
         runs = body.source_fields.get("producer_runs", {})
+        raw_records = read_raw_records(root, ds.manifest, ds.observations) if raw_backed else {}
         for obs in ds.observations:
-            raw = None
             if raw_backed:
-                artifact = next(a for a in ds.manifest.artifacts if a.artifact_id == obs.raw_artifact_id)
-                raw = json.loads(read_provenance(root, artifact))
-            roles = ("prefill", "decode") if disagg else ("decode",)
-            label = {r: (r if disagg else "aggregated") for r in roles}
-            workers = body.workers
-            config: dict[str, Any] = {
-                "model": body.model_id,
-                "hardware": body.hardware,
-                "framework": body.framework,
-                "precision": body.precision["weights"],
-                "spec_method": ident["spec_method"],
-                "disagg": disagg,
-                "is_multinode": ident["is_multinode"],
-            }
-            for role in ("prefill", "decode"):
-                present = role in roles
-                config[f"{role}_tp"] = _role(par, label[role], "tp") if present else None
-                config[f"{role}_ep"] = _role(par, label[role], "ep") if present else None
-                config[f"{role}_dp_attention"] = ident["dp_attention"][role]
-                config[f"{role}_num_workers"] = workers[label[role]].num_workers if present else None
-                config[f"num_{role}_gpu"] = workers[label[role]].total_gpus if present else None
-            config["offload_mode"] = ident["offload_mode"]
-            config["workers"] = raw["workers"] if raw is not None else None
-            if raw is not None:
-                # Fields the typed view cannot represent come back from the raw record.
-                for key in CONFIG_FIELDS:
-                    config[key] = raw[key]
+                raw = json.loads(raw_records[obs.observation_id])
+                config = {key: raw[key] for key in CONFIG_FIELDS}
+                config.update({key: raw[key] for key in ("offload_mode", "workers") if key in raw})
+                metrics = dict(raw["metrics"])
+                recipe_fingerprint = raw.get("recipe_fingerprint")
+            else:
+                config = json.loads(obs.source_config_json)
+                metrics = {**metrics_by_obs[obs.observation_id], **json.loads(obs.unmapped_metrics_json or "{}")}
+                recipe_fingerprint = obs.recipe_fingerprint
             config_id = obs.source_config_id
             config = {"id": config_id, **config}
             if configs.setdefault(config_id, config) != config:
-                # Typed view of one source config is identical for every observation by construction.
                 configs[config_id] = {**configs[config_id], "_conflict": True}
             url = obs.producer_id
             run_id = url if PRODUCER_URL.fullmatch(url or "") else f"unknown-producer:{obs.source_observation_id}"
             workflows.setdefault(run_id, {"id": run_id, **runs.get(url or "", {})})
-            metrics = dict(raw["metrics"]) if raw is not None else dict(metrics_by_obs[obs.observation_id])
-            if raw is None:
-                # pp/cp/dcp live in the identity now; hand them back under the source names.
-                for role in ("aggregated", "prefill", "decode"):
-                    for dim, name in (("pp", "pp"), ("cp", "pcp_size"), ("dcp", "dcp_size")):
-                        degree = par.get(role, {}).get(dim)
-                        if degree:
-                            metrics[name if role == "aggregated" else f"{role}_{name}"] = degree
             benches.append(
                 {
                     "date": obs.collected_at,
@@ -161,7 +131,7 @@ def tables_from_dataset(root: Path, *, raw_backed: bool) -> dict[str, list]:
                     "id": int(obs.source_observation_id),
                     "config_id": config_id,
                     "workflow_run_id": run_id,
-                    "recipe_fingerprint": raw.get("recipe_fingerprint") if raw is not None else None,
+                    "recipe_fingerprint": recipe_fingerprint,
                 }
             )
     return {
