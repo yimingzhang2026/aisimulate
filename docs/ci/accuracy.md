@@ -586,3 +586,48 @@ A workflow dry run does not rerun predictors. Use the deterministic tests in
 `tests/fpm_accuracy/test_digest.py` to exercise regressions, coverage losses,
 changed datasets, missing runs, daylight-saving cutoffs, deduplication, and
 interrupted thread delivery without sending fake alarms to Slack.
+
+## Private mirror and promotion to the public dataset
+
+`ai-dynamo/aisim-data-internal` has the same layout and schemas as the public
+dataset, for sensitive hardware and models. `ai-dynamo/aisim-infx-cache` stays a
+separate private cache in the same E2E layout and is never a promotion source.
+The mirror repository is not created by this repository; its definitions live here.
+
+**One validator.** `python -m aisimulate_core.data.mirror validate --root DIR
+--repo ID --profile mirror|public` (library: `validate_tree(root, repo=...,
+profile=...)`) checks indexes, manifests and hashes, E2E tables, evaluation records
+and their identity paths, snapshots, generated schema snapshots, catalog drift and
+file rules (paths, suffixes, symlinks, magic bytes). `--repo` defaults to
+`ai-dynamo/aisim-data-internal` and must equal `dataset_id` in `catalog/dataset.json`.
+The `public` profile adds the publication rules below. The mirror CI definition is
+[`.github/mirror/aisim-data-internal-validate.yml`](../../.github/mirror/aisim-data-internal-validate.yml),
+a template to copy into the mirror repository. It checks out this repository at a
+pinned SHA (`AISIM_VALIDATOR_REF`), the same SHA the public dataset CI pins, uses no
+secrets, and prints the validator fingerprint.
+
+**Visibility and redaction.** `mirror/visibility.json` (`aisim-visibility/v1`, private
+only) labels a file or directory prefix `public`, `internal` or `restricted`; an
+unlabeled path is `internal`. Before a directory is labeled `public`, remove or replace
+with `[REDACTED]` the producer run URL (`producer_id`), image names and digests, patch
+references and credentials; omit logs, raw tool output and per-request tables.
+`check_publishable` fails on any of these. When the labeled bytes are a redaction, the
+entry's `original_sha256` records the original hash; it reaches only the private
+promotion ledger. InferenceX-derived data is published as aggregates only (decision
+AISIM-2312 default): configurations and evaluation records built on it are not
+promotable, and a public page may show rows that pass `check_disclosure` (allowed
+fields only, at least five scored points per cell). `RedactionPolicy` holds each default.
+
+**Promotion.** Write a `PromotionRequest` (`aisim-promotion/v1`): target repo, the
+reviewed internal commit, the directories under `data/` or `eval/`, the requester and
+approvals. `python -m aisimulate_core.data.promote plan --source-root DIR --request FILE
+--policy FILE` prints the content digest and every blocker. Named reviewers, listed in
+a trusted policy file (`{"reviewers": [...], "min_approvals": 1}`, read from the default
+branch, not from the tree), approve that digest; the requester cannot approve, and any
+changed byte invalidates approvals. `apply` copies the files path-identically, never
+overwrites different content, regenerates the category indexes and catalog in the target,
+requires the `public` profile to pass there, and otherwise restores the target. It then
+writes `mirror/promotions/<digest>.json` in the private source. A selection must be
+closed: manifest artifacts, evaluation truth inputs and snapshot members are all in it,
+so a snapshot never spans private and public membership. Open the public change as an
+ordinary pull request with the regenerated catalog.
