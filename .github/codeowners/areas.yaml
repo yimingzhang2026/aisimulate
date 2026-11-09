@@ -78,6 +78,7 @@ areas:
       - tests/test_agentx_snapshot_export.py
       - tests/test_agentx_live_warmup.py
       - tests/test_runner.py
+      - tests/test_sglang_pd_replay.py
       - tests/test_traffic.py
       - tests/e2e/
   - label: mocker
@@ -312,6 +313,8 @@ shared:
   - glob: tests/test_agentx_live_warmup.py
     owners: [replay, maintainers]
   - glob: tests/test_runner.py
+    owners: [replay, maintainers]
+  - glob: tests/test_sglang_pd_replay.py
     owners: [replay, maintainers]
   - glob: tests/test_traffic.py
     owners: [replay, maintainers]
