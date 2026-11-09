@@ -73,7 +73,7 @@ def test_no_other_step_receives_a_secret_and_secrets_are_not_job_or_workflow_wid
 def test_credentialed_jobs_declare_the_environment_and_check_out_main():
     for name, job_ids in (
         ("e2e-accuracy.yml", ["resolve"]),
-        ("e2e-accuracy-branch.yml", ["measurements", "shards", "campaign"]),
+        ("e2e-accuracy-branch.yml", ["measurements", "shards", "campaign", "agentx", "qualify-agentx"]),
     ):
         document = load(name)
         for job_id in job_ids:
