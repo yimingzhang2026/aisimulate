@@ -152,6 +152,26 @@ shared:
     owners: [replay, forward-pass-engine, maintainers]
   - glob: .claude/skills/aisimulate-agentx-gap-debug
     owners: [replay, forward-pass-engine, maintainers]
+  - glob: .agents/skills/aisimulate-benchmark/
+    owners: [forward-pass-engine, infra, maintainers]
+  - glob: .claude/skills/aisimulate-benchmark
+    owners: [forward-pass-engine, infra, maintainers]
+  - glob: .agents/skills/aisimulate-benchmark-plan/
+    owners: [forward-pass-engine, infra, maintainers]
+  - glob: .claude/skills/aisimulate-benchmark-plan
+    owners: [forward-pass-engine, infra, maintainers]
+  - glob: .agents/skills/aisimulate-benchmark-collect/
+    owners: [forward-pass-engine, infra, maintainers]
+  - glob: .claude/skills/aisimulate-benchmark-collect
+    owners: [forward-pass-engine, infra, maintainers]
+  - glob: .agents/skills/aisimulate-benchmark-evaluate/
+    owners: [forward-pass-engine, infra, maintainers]
+  - glob: .claude/skills/aisimulate-benchmark-evaluate
+    owners: [forward-pass-engine, infra, maintainers]
+  - glob: .agents/skills/aisimulate-benchmark-publish/
+    owners: [forward-pass-engine, infra, maintainers]
+  - glob: .claude/skills/aisimulate-benchmark-publish
+    owners: [forward-pass-engine, infra, maintainers]
   - glob: python/aisimulate/tools/simulation_perf_gate/
     owners: [replay, forward-pass-engine, infra, maintainers]
   - glob: pages/
