@@ -57,6 +57,65 @@ download. Repeating a fetch reuses verified cache entries and downloads nothing.
 on success, `2` for an invalid or unsupported selection, and `1` for revision, transfer, integrity
 or offline failures.
 
+### Air-gapped and offline use
+
+Prepare on a connected machine, then move the cache; the disconnected machine makes no
+network request. Pin the dataset to a full commit SHA, because a branch or tag cannot be
+resolved offline.
+
+```bash
+# 1. Connected: resolve once, check the size, download and verify into a cache.
+aisimulate data fetch --repo OWNER/NAME --revision <40-hex-sha> --category op-latency \
+  --hardware b200_sxm --framework vllm --framework-version 0.24.0 --dry-run --cache-dir ./aisim-cache
+aisimulate data fetch --repo OWNER/NAME --revision <40-hex-sha> --category op-latency \
+  --hardware b200_sxm --framework vllm --framework-version 0.24.0 --cache-dir ./aisim-cache
+
+# 2. Copy ./aisim-cache to the air-gapped host (any file transfer).
+# 3. Disconnected: check completeness, then pin and run.
+aisimulate data fetch ... --offline --dry-run --cache-dir ./aisim-cache   # lists `missing`; empty means ready
+export AISIM_DATASET=OWNER/NAME@<40-hex-sha> AISIM_DATA_CACHE=./aisim-cache AISIM_DATA_OFFLINE=1
+```
+
+`AISIM_DATASET` (with `AISIM_DATA_CACHE` and `AISIM_DATA_OFFLINE`) pins a predictor run: the data a
+configuration needs is taken from the cached revision, a missing or corrupt file is a precise error, and
+there is no fallback to other data. Other pin variables: `AISIM_DATA_CATEGORIES` (default `fpm`),
+`AISIM_DATA_CONFIGURATION` (choose among several matches), `AISIM_DATA_MAX_BYTES` (auto-download
+threshold, default 256 MiB) and `AISIM_DATA_LOCAL` (a dataset-layout directory used instead of Hugging Face).
+Private datasets use the standard `HF_TOKEN` only while connected; the cache needs none.
+
+<a id="non-python-consumers"></a>
+
+### Operation data for consumers without the Python data library
+
+Rust `perf_database` users, sweeper and planner embeddings and Rust tests read a `systems/` directory
+(`systems_paths`, `AICONFIGURATOR_SYSTEMS_PATH`) and never run the data library. Today that directory is the
+packaged `aisimulate_core/systems`. Once production operation data leaves the wheel, prepare a root in Python
+once and point the consumer at it:
+
+```python
+from aisimulate_core.data.ensure import DataPin
+from aisimulate_core.data.materialize import materialize_systems_root
+
+root = materialize_systems_root(
+    {"system": "b200_sxm", "backend": "vllm", "backend_version": "0.24.0"},
+    DataPin(repo="OWNER/NAME", revision="<40-hex-sha>", offline=True, cache_dir="./aisim-cache"),
+    "./systems-root",
+)
+# root.env == {"AICONFIGURATOR_SYSTEMS_PATH": "./systems-root"}; pass root.root as `systems_paths` / `systems_path`.
+```
+
+The root holds the packaged specs and support files plus the verified pinned `data/` tables (hard-linked from
+the cache when possible); it never mixes in packaged tables. The call fails if the destination exists.
+
+| Consumer | Preparation |
+|---|---|
+| Python predict/recommend/replay | Automatic through the pin; `data fetch` only prefetches. |
+| Sweeper, planner, Python embedding of the Rust engine | Pass `systems_paths` or set `AICONFIGURATOR_SYSTEMS_PATH` to the prepared root. |
+| Rust `perf_database` crate users | Same root as `systems_paths`/`DataRoots`; no Python at run time. |
+| Rust tests (about 38 files resolve the in-tree `systems/` directory) | Prepare a root before `cargo test` and route the sites through one resolver; a Phase 6 task. |
+| Air-gapped hosts | Prefetch with a full-SHA pin, copy the cache, run with `AISIM_DATA_OFFLINE=1`. |
+| `pip install` users | A wheel without op data needs one `data fetch` (or the automatic first-use download below the size threshold) per system and framework. |
+
 <a id="common-options"></a>
 
 ## Common Options
