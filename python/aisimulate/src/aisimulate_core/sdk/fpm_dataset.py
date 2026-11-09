@@ -19,8 +19,11 @@ import shutil
 import tempfile
 import warnings
 from pathlib import Path, PurePosixPath
+from urllib.error import HTTPError
 from urllib.parse import quote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+from aisimulate_core.data.repos import retired_repo_hint
 
 
 class _HubRedirectHandler(HTTPRedirectHandler):
@@ -266,8 +269,13 @@ def materialize_fpm_profile(
             output = temporary / item["target"]
             output.parent.mkdir(parents=True, exist_ok=True)
             url = f"https://huggingface.co/datasets/{repo}/resolve/{revision}/{quote(item['path'], safe='/')}"
-            with urlopen(_download_request(url), timeout=120) as response, output.open("wb") as stream:
-                shutil.copyfileobj(response, stream)
+            try:
+                with urlopen(_download_request(url), timeout=120) as response, output.open("wb") as stream:
+                    shutil.copyfileobj(response, stream)
+            except HTTPError as exc:
+                if exc.code in (401, 403, 404) and (hint := retired_repo_hint(repo)):
+                    raise ValueError(f"cannot fetch {item['path']} at {revision}: {hint}") from exc
+                raise
         _verify(temporary, files)
         try:
             temporary.rename(destination)

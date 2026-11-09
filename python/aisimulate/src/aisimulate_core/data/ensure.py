@@ -59,6 +59,7 @@ from aisimulate_core.data.fetch import (
     fetch,
 )
 from aisimulate_core.data.loaders import LOADERS, FpmData, LoaderError, OpLatencyData
+from aisimulate_core.data.repos import resolve_ref
 
 DEFAULT_MAX_BYTES = 256 * 1024 * 1024
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -163,6 +164,9 @@ def pin_from_environment(env: Mapping[str, str] | None = None) -> DataPin | None
         repo, sep, revision = spec.partition("@")
         if not sep or not repo or not revision:
             raise ValueError("AISIM_DATASET must be <owner>/<name>@<revision>")
+        # A symbolic ref on the retired FPM repository follows its successor; a commit SHA never moves.
+        resolved = resolve_ref(repo, revision)
+        repo, revision = resolved.repo, resolved.revision
     kwargs: dict[str, Any] = {}
     if env.get("AISIM_DATA_CATEGORIES"):
         kwargs["categories"] = tuple(c.strip() for c in env["AISIM_DATA_CATEGORIES"].split(",") if c.strip())
