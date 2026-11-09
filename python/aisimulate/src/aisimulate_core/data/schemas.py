@@ -20,6 +20,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from aisimulate_core.data import CategoryIndex, DatasetIndex, Manifest
+from aisimulate_core.data.catalog import CatalogRow, SystemRow
 from aisimulate_core.data.eval import EvalRecord
 from aisimulate_core.data.gpu_time import GpuTime
 
@@ -27,6 +28,8 @@ from aisimulate_core.data.gpu_time import GpuTime
 # never edit an existing entry's meaning.
 SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "aisim-artifact-manifest/v1": Manifest,
+    "aisim-catalog-systems/v1": SystemRow,
+    "aisim-catalog/v1": CatalogRow,
     "aisim-category-index/v1": CategoryIndex,
     "aisim-dataset-index/v1": DatasetIndex,
     "aisim-eval/v1": EvalRecord,
