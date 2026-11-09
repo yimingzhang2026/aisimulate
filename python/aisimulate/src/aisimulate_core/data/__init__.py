@@ -8,6 +8,7 @@ This module never authenticates, downloads, publishes, or runs stored scripts.
 
 import hashlib
 import json
+import re
 import shutil
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
@@ -16,7 +17,21 @@ import pyarrow.parquet as pq
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
-Category = Literal["op-latency", "fpm", "e2e"]
+Category = Literal["op-latency", "fpm", "e2e", "eval", "systems"]
+Purpose = Literal[
+    "operation-tables",
+    "execution-profile",
+    "e2e-configuration",
+    "evaluation-record",
+    "system-spec",
+]
+# Version 1 hashed only the original Identity fields. Version 2 adds the
+# first-class deployment fields below. A version is chosen from the identity
+# (see configuration_id) so existing IDs never change and a v2-only field can
+# never be silently dropped from a hash.
+IDENTITY_HASH_VERSIONS = (1, 2)
+_V2_FIELDS = ("parallelism", "parallelism_complete", "precision", "deployment")
+_DIMENSION = re.compile(r"^(x-)?[a-z][a-z0-9_]*$")
 
 
 def _relative(value: str) -> str:
@@ -56,12 +71,45 @@ class Identity(_Record):
     model: str | None
     effective_settings: dict[str, JsonValue]
     unresolved_identity: dict[str, JsonValue] | None
+    # Identity hash v2 fields. None means unknown, never a default.
+    # Parallelism is an open {worker_role: {dimension: degree}} map, e.g.
+    # {"aggregated": {"tp": 4, "ep": 8}}. Degree 1 is normalized away, so a new
+    # dimension at degree 1 leaves existing IDs unchanged. Unregistered
+    # dimensions need an "x-" prefix (registry checks live in the rule set).
+    parallelism: dict[str, dict[str, int]] | None = None
+    # True: absent dimensions are 1. Otherwise absent dimensions are unknown.
+    parallelism_complete: bool | None = None
+    precision: dict[str, str] | None = None  # e.g. {"weights": "fp8", "kv_cache": "fp8"}
+    deployment: Literal["aggregated", "disaggregated"] | None = None
+
+    @field_validator("parallelism")
+    @classmethod
+    def normalize_parallelism(cls, value):
+        if value is None:
+            return None
+        out = {}
+        for role, dims in value.items():
+            if not role:
+                raise ValueError("worker role must be non-empty")
+            kept = {}
+            for name, degree in dims.items():
+                if not _DIMENSION.match(name):
+                    raise ValueError(f"invalid parallelism dimension: {name!r}")
+                if type(degree) is not int or degree < 1:
+                    raise ValueError(f"parallelism degree must be a positive integer: {name}={degree!r}")
+                if degree != 1:
+                    kept[name] = degree
+            out[role] = dict(sorted(kept.items()))
+        return dict(sorted(out.items()))
+
+    def uses_v2_fields(self) -> bool:
+        return any(getattr(self, f) is not None for f in _V2_FIELDS)
 
 
 class Manifest(_Record):
     schema_version: Literal["aisim-artifact-manifest/v1"]
     category: Category
-    purpose: Literal["operation-tables", "execution-profile"]
+    purpose: Purpose
     configuration_id: str = Field(pattern=r"^cfg-[0-9a-f]{64}$")
     identity: Identity
     requested_settings: dict[str, JsonValue] | None
@@ -72,7 +120,7 @@ class Manifest(_Record):
 
 class Entry(_Record):
     configuration_id: str = Field(pattern=r"^cfg-[0-9a-f]{64}$")
-    purpose: Literal["operation-tables", "execution-profile"]
+    purpose: Purpose
     identity: Identity
     manifest: Artifact
 
@@ -97,9 +145,25 @@ class DatasetIndex(_Record):
     categories: dict[Category, CategoryReference]
 
 
-def configuration_id(category: str, purpose: str, identity: Identity) -> str:
-    """Hash effective identity, including explicit nulls and unresolved source facts."""
-    payload = {"version": 1, "category": category, "purpose": purpose, "identity": identity.model_dump()}
+def configuration_id(category: str, purpose: str, identity: Identity, version: int | None = None) -> str:
+    """Hash effective identity, including explicit nulls and unresolved source facts.
+
+    version=None picks 1 when no v2 field is set (keeping every existing ID
+    stable) and 2 otherwise. Version 1 cannot hash an identity with v2 fields.
+    """
+    if version is None:
+        version = 2 if identity.uses_v2_fields() else 1
+    if version not in IDENTITY_HASH_VERSIONS:
+        raise ValueError(f"unsupported identity hash version: {version}")
+    exclude = set(_V2_FIELDS) if version == 1 else set()
+    if version == 1 and identity.uses_v2_fields():
+        raise ValueError("identity hash v1 cannot represent parallelism, precision or deployment")
+    payload = {
+        "version": version,
+        "category": category,
+        "purpose": purpose,
+        "identity": identity.model_dump(exclude=exclude),
+    }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
     return "cfg-" + hashlib.sha256(canonical.encode()).hexdigest()
 
