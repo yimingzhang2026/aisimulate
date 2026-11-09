@@ -32,6 +32,7 @@ areas:
       - crates/core/perfmodel/
       - crates/tests/public-api/
       - python/aisimulate/
+      - python/aisimulate/src/aisimulate_core/data/
       - python/aisimulate/src/aisimulate/capacity.py
       - tests/test_aic.py
       - tests/test_spline_estimator_config.py

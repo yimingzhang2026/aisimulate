@@ -51,6 +51,7 @@
 /tests/test_fpm_profile_workflow.py                      @ai-dynamo/aisimulate-forward-pass-engine-codeowners
 /crates/core/parity_tests/perfmodel/                     @ai-dynamo/aisimulate-forward-pass-engine-codeowners
 /tests/test_spline_estimator_config.py                   @ai-dynamo/aisimulate-forward-pass-engine-codeowners
+/python/aisimulate/src/aisimulate_core/data/             @ai-dynamo/aisimulate-forward-pass-engine-codeowners
 /python/aisimulate/src/aisimulate/capacity.py            @ai-dynamo/aisimulate-forward-pass-engine-codeowners
 
 # === sweeper  (@ai-dynamo/aisimulate-sweeper-codeowners) ===
